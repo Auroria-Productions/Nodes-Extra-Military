@@ -118,6 +118,24 @@ final class MilitaryState {
         return armies.values().stream().filter(a -> nation.equals(a.nationId)).sorted(Comparator.comparing(a -> key(a.name))).toList();
     }
 
+    /**
+     * Build a stable, searchable roster without changing saved membership order.
+     * Matches are case-insensitive; ties are ordered by UUID for pagination stability.
+     */
+    static List<UUID> roster(Division division, java.util.function.Function<UUID, String> displayName, String query) {
+        String filter = query == null ? "" : query.strip().toLowerCase(Locale.ROOT);
+        return division.members.stream()
+                .filter(id -> {
+                    String name = displayName.apply(id);
+                    return filter.isEmpty() || (name != null && name.toLowerCase(Locale.ROOT).contains(filter));
+                })
+                .sorted(Comparator.comparing(
+                        (UUID id) -> java.util.Objects.toString(displayName.apply(id), ""),
+                        String.CASE_INSENSITIVE_ORDER
+                    ).thenComparing(UUID::toString))
+                .toList();
+    }
+
     Division membership(UUID id) {
         for (Army army : armies.values()) {
             for (Division division : army.divisions.values()) {
