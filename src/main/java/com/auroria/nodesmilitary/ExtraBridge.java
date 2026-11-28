@@ -1,97 +1,159 @@
 package com.auroria.nodesmilitary;
 
 import com.google.gson.*;
-import org.bukkit.Bukkit;
-import org.bukkit.entity.Player;
-import phonon.nodes.objects.Nation;
-import phonon.nodes.objects.Territory;
-import java.nio.charset.StandardCharsets;
+import org.bukkit.event.*;
+import org.bukkit.event.server.*;
+import org.bukkit.plugin.java.JavaPlugin;
+import java.io.IOException;
 import java.nio.file.*;
+import java.nio.file.attribute.*;
 import java.util.*;
+import java.util.logging.Logger;
 
-/** Optional read-only Nodes-Extra integration. Never writes the logistics or government state. */
-final class ExtraBridge {
-    record Depot(String nation, int territory, int food,int equipment,int fuel,long blockadedUntil){}
-    record Link(String nation,int from,int to,String type){}
-    record Snapshot(boolean available,String issue,JsonObject governments,List<Depot> depots,List<Link> links){}
+final class ExtraBridge implements Listener {
+
+    record Office(String head, String marshal) {
+    }
+
+    record Depot(String name, String nationId, String world, int territoryId, int food, int equipment, int fuel, long blockadedUntil) {
+    }
+
+    record Link(String nationId, String world, String type, int from, int to) {
+    }
+
+    record Snapshot(String problem, Map<String, Office> offices, List<Depot> depots, List<Link> links) {
+
+        static Snapshot unavailable(String reason) {
+            return new Snapshot(reason, Map.of(), List.of(), List.of());
+        }
+
+        boolean appointed(UUID player, UUID nation) {
+            Office o = offices.get(nation.toString());
+            return o != null && (player.toString().equals(o.head()) || player.toString().equals(o.marshal()));
+        }
+    }
+
+    private static final Snapshot ABSENT = Snapshot.unavailable("Nodes-Extra is not installed or enabled.");
+
+    private static final class Source {
+
+        final Path path;
+
+        volatile Snapshot snapshot = Snapshot.unavailable("Waiting for the first Nodes-Extra snapshot.");
+
+        FileTime lastModified;
+
+        long length = -1;
+
+        Object fileKey;
+
+        Source(Path path) {
+            this.path = path;
+        }
+
+        synchronized void read(Logger logger) {
+            try {
+                BasicFileAttributes a = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                if (a.lastModifiedTime().equals(lastModified) && a.size() == length && Objects.equals(fileKey, a.fileKey()))
+                    return;
+                Snapshot updated = parse(Storage.readObject(path, 15_000_000));
+                snapshot = updated;
+                lastModified = a.lastModifiedTime();
+                length = a.size();
+                fileKey = a.fileKey();
+            } catch (IOException | RuntimeException ex) {
+                String problem = ex instanceof NoSuchFileException ? "Waiting for Nodes-Extra to save its state." : "Cannot read Nodes-Extra state: " + ex.getMessage();
+                if (!problem.equals(snapshot.problem()) && !(ex instanceof NoSuchFileException))
+                    logger.warning(problem);
+                snapshot = Snapshot.unavailable(problem);
+                lastModified = null;
+            }
+        }
+    }
+
     private final MilitaryPlugin plugin;
-    private long lastRead = -1;
-    private Snapshot cached = new Snapshot(false,"Nodes-Extra not installed",new JsonObject(),List.of(),List.of());
-    ExtraBridge(MilitaryPlugin plugin){this.plugin=plugin;}
-    synchronized Snapshot snapshot(boolean force){
-        long now=System.currentTimeMillis();
-        if(!force && lastRead>=0 && now-lastRead<5000)return cached;
-        lastRead=now;
-        if(!Bukkit.getPluginManager().isPluginEnabled("Nodes-Extra")) {
-            return cached=new Snapshot(false,"Nodes-Extra not installed",new JsonObject(),List.of(),List.of());
+
+    private volatile Source source;
+
+    ExtraBridge(MilitaryPlugin plugin) {
+        this.plugin = plugin;
+    }
+
+    void bind() {
+        var extra = plugin.getServer().getPluginManager().getPlugin("Nodes-Extra");
+        if (!(extra instanceof JavaPlugin jp) || !jp.isEnabled()) {
+            source = null;
+            return;
         }
-        Path file=Bukkit.getPluginManager().getPlugin("Nodes-Extra").getDataFolder().toPath().resolve("state.json");
         try {
-            if(!Files.isRegularFile(file))return cached=new Snapshot(false,"Run /nextra save to initialise logistics data",new JsonObject(),List.of(),List.of());
-            if(Files.size(file)>15_000_000)throw new IllegalStateException("Nodes-Extra file too large");
-            JsonObject doc=JsonParser.parseString(Files.readString(file,StandardCharsets.UTF_8)).getAsJsonObject();
-            if(getInt(doc,"schema",-1)!=1)throw new IllegalArgumentException("Unsupported Nodes-Extra state schema");
-            JsonObject governments=object(doc,"governments");
-            List<Depot> depots=new ArrayList<>();
-            for(JsonElement e:object(doc,"depots").asMap().values()) {
-                if(!e.isJsonObject())continue;JsonObject d=e.getAsJsonObject();
-                depots.add(new Depot(getStr(d,"nationId",""),getInt(d,"territoryId",-1),getInt(d,"food",0),getInt(d,"equipment",0),getInt(d,"fuel",0),getLong(d,"blockadedUntil",0)));
-            }
-            List<Link> links=new ArrayList<>();
-            for(JsonElement e:object(doc,"links").asMap().values()) {
-                if(!e.isJsonObject())continue;JsonObject d=e.getAsJsonObject();
-                links.add(new Link(getStr(d,"nationId",""),getInt(d,"from",-1),getInt(d,"to",-1),getStr(d,"type","")));
-            }
-            return cached=new Snapshot(true,"",governments,depots,links);
-        }catch(Exception ex){
-            plugin.getLogger().warning("Nodes-Extra data not usable (read-only bridge): " + ex.getMessage());
-            return cached=new Snapshot(false,"Nodes-Extra saved data unavailable",new JsonObject(),List.of(),List.of());
+            source = new Source(Storage.jsonFile(jp.getDataFolder().toPath(), jp.getConfig().getString("storage.stateFilename", "state.json")));
+        } catch (IOException e) {
+            source = null;
+            plugin.getLogger().warning(e.getMessage());
         }
     }
-    boolean marshalOrHead(Player player,Nation nation){
-        if(nation==null)return false;
-        Snapshot ss=snapshot(false);
-        if(!ss.available)return false;
-        JsonObject record=object(ss.governments,nation.getUuid().toString());
-        String self=player.getUniqueId().toString();
-        return self.equals(getStr(record,"head",null)) || self.equals(getStr(object(record,"offices"),"MARSHAL",null));
+
+    @EventHandler
+    public void enabled(PluginEnableEvent e) {
+        if (e.getPlugin().getName().equalsIgnoreCase("Nodes-Extra"))
+            bind();
     }
-    String report(MilitaryState.Army army,Nation nation,int maxHops){
-        if(army.musterTerritoryId==null)return "No muster territory assigned";
-        Snapshot ss=snapshot(false);
-        if(!ss.available)return ss.issue;
-        if(nation==null)return "Nation is missing";
-        Map<Integer,Territory> territory=plugin.nodes().territories();
-        Territory start=territory.get(army.musterTerritoryId);
-        if(!plugin.nodes().owns(start,nation))return "Muster territory is not owned by this nation";
-        Map<Integer,Set<Integer>> graph=new HashMap<>();
-        for(Map.Entry<Integer,Territory> one:territory.entrySet()) {
-            if(!plugin.nodes().owns(one.getValue(),nation))continue;
-            Set<Integer> neigh=graph.computeIfAbsent(one.getKey(),k->new HashSet<>());
-            for(int n:plugin.nodes().neighbors(one.getValue()))if(plugin.nodes().owns(territory.get(n),nation))neigh.add(n);
-        }
-        for(Link link:ss.links){
-            if(!nation.getUuid().toString().equals(link.nation))continue;
-            if(!graph.containsKey(link.from)||!graph.containsKey(link.to))continue;
-            // In Nodes-Extra ROAD/RAIL must use native adjacency; SEA requires existing linked ports.
-            boolean canConnect=link.type.equalsIgnoreCase("SEA") && plugin.nodes().portsShareGroup(link.from,link.to);
-            if(canConnect){graph.get(link.from).add(link.to);graph.get(link.to).add(link.from);}
-        }
-        Map<Integer,Integer> distances=TerritoryRoutes.distances(graph,army.musterTerritoryId,maxHops);
-        boolean reachableEmpty=false,reachableBlocked=false;
-        for(Depot depot:ss.depots){
-            if(!nation.getUuid().toString().equals(depot.nation)||!distances.containsKey(depot.territory))continue;
-            if(depot.blockadedUntil>System.currentTimeMillis()){reachableBlocked=true;continue;}
-            if(depot.food>0 && depot.equipment>0)return "SUPPLIED ("+distances.get(depot.territory)+" territory hops)";
-            if(depot.food>0 || depot.equipment>0)return "LIMITED ("+distances.get(depot.territory)+" territory hops)";
-            reachableEmpty=true;
-        }
-        if(reachableBlocked)return "BLOCKADED";
-        if(reachableEmpty)return "EMPTY DEPOTS";
-        return "UNSUPPLIED (no stocked depot within "+maxHops+" hops)";
+
+    @EventHandler
+    public void disabled(PluginDisableEvent e) {
+        if (e.getPlugin().getName().equalsIgnoreCase("Nodes-Extra"))
+            source = null;
     }
-    static JsonObject object(JsonObject o,String k){if(o==null)return new JsonObject();JsonElement e=o.get(k);return e!=null&&e.isJsonObject()?e.getAsJsonObject():new JsonObject();}
-    static String getStr(JsonObject o,String k,String fallback){try{JsonElement e=o.get(k);return e!=null&&!e.isJsonNull()?e.getAsString():fallback;}catch(Exception ex){return fallback;}}
-    static int getInt(JsonObject o,String k,int fallback){try{JsonElement e=o.get(k);return e!=null&&!e.isJsonNull()?e.getAsInt():fallback;}catch(Exception ex){return fallback;}}
-    static long getLong(JsonObject o,String k,long fallback){try{JsonElement e=o.get(k);return e!=null&&!e.isJsonNull()?e.getAsLong():fallback;}catch(Exception ex){return fallback;}}
+
+    void refresh() {
+        Source active = source;
+        if (active != null)
+            active.read(plugin.getLogger());
+    }
+
+    boolean installed() {
+        return source != null;
+    }
+
+    Snapshot snapshot() {
+        Source active = source;
+        return active == null ? ABSENT : active.snapshot;
+    }
+
+    static Snapshot parse(JsonObject json) throws IOException {
+        if (!json.has("schema") || !json.get("schema").getAsJsonPrimitive().isNumber() || json.get("schema").getAsBigDecimal().intValueExact() != 1)
+            throw new IOException("Unsupported Nodes-Extra schema");
+        Map<String, Office> offices = new HashMap<>();
+        List<Depot> depots = new ArrayList<>();
+        List<Link> links = new ArrayList<>();
+        for (var e : object(json, "governments").entrySet()) {
+            JsonObject gov = e.getValue().getAsJsonObject();
+            offices.put(e.getKey(), new Office(str(gov, "head"), str(object(gov, "offices"), "MARSHAL")));
+        }
+        for (var e : object(json, "depots").entrySet()) {
+            JsonObject d = e.getValue().getAsJsonObject();
+            depots.add(new Depot(d.has("name") ? str(d, "name") : e.getKey(), str(d, "nationId"), str(d, "world"), integer(d, "territoryId", -1), integer(d, "food", 0), integer(d, "equipment", 0), integer(d, "fuel", 0), number(d, "blockadedUntil", 0)));
+        }
+        for (var e : object(json, "links").entrySet()) {
+            JsonObject link = e.getValue().getAsJsonObject();
+            links.add(new Link(str(link, "nationId"), str(link, "world"), str(link, "type"), integer(link, "from", -1), integer(link, "to", -1)));
+        }
+        return new Snapshot(null, Map.copyOf(offices), List.copyOf(depots), List.copyOf(links));
+    }
+
+    private static JsonObject object(JsonObject o, String key) {
+        return o.has(key) ? o.getAsJsonObject(key) : new JsonObject();
+    }
+
+    private static String str(JsonObject o, String key) {
+        return !o.has(key) || o.get(key).isJsonNull() ? "" : o.get(key).getAsString();
+    }
+
+    private static long number(JsonObject o, String key, long fallback) {
+        return o.has(key) ? o.get(key).getAsLong() : fallback;
+    }
+
+    private static int integer(JsonObject o, String key, int fallback) {
+        return Math.toIntExact(number(o, key, fallback));
+    }
 }

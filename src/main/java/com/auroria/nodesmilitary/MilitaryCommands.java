@@ -1,263 +1,475 @@
 package com.auroria.nodesmilitary;
 
+import net.kyori.adventure.audience.Audience;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
-import phonon.nodes.objects.*;
+import phonon.nodes.objects.Nation;
+import phonon.nodes.objects.Resident;
+import phonon.nodes.objects.Territory;
 import java.util.*;
-import java.util.stream.Collectors;
+import java.util.logging.Level;
+import static com.auroria.nodesmilitary.MilitaryState.*;
 
-/** Authoritative command layer shared by chat commands and clickable GUI actions. */
-final class MilitaryCommands implements CommandExecutor,TabCompleter {
-    static final Set<String> DIVISION_TYPES=Set.of("infantry","cavalry","artillery","engineers","naval","reconnaissance");
-    static final List<String> RANKS=List.of("private","corporal","sergeant","lieutenant","captain","major","colonel","general");
+final class MilitaryCommands implements TabExecutor {
+
+    private static final List<String> ROOTS = List.of("gui", "help", "overview", "army", "division", "enlist", "leave", "muster", "order", "report");
+
+    private static final List<String> STAFF = List.of("history", "save", "reload");
+
+    private static final List<String> ARMY = List.of("list", "create", "info", "commander", "disband");
+
+    private static final List<String> DIVISION = List.of("create", "roster", "commander", "rank", "disband");
+
     private final MilitaryPlugin plugin;
-    MilitaryCommands(MilitaryPlugin plugin){this.plugin=plugin;}
-    @Override public boolean onCommand(CommandSender sender,Command command,String alias,String[] args){
-        if(!sender.hasPermission("nodesmilitary.use") && !sender.hasPermission("nodesmilitary.admin")){msg(sender,"You need nodesmilitary.use");return true;}
-        if(args.length==0){help(sender);return true;}
-        String action=args[0].toLowerCase(Locale.ROOT);
-        try{
-            switch(action){
-                case "help" -> help(sender);
-                case "gui","menu" -> {Player p=player(sender);if(p!=null){if(!plugin.getConfig().getBoolean("gui.enabled",true))msg(sender,"Military GUI disabled in config.yml");else plugin.gui().openRoot(p);}}
-                case "overview" -> overview(sender);
-                case "army" -> army(sender,args);
-                case "division" -> division(sender,args);
-                case "enlist" -> enlist(sender,args);
-                case "leave" -> leave(sender);
-                case "muster" -> muster(sender,args);
-                case "order" -> order(sender,args);
-                case "report" -> report(sender,args);
-                case "history" -> history(sender);
-                case "save" -> {if(admin(sender)){plugin.persist();msg(sender,"Military state and public map export saved");}}
-                case "reload" -> {if(admin(sender)){plugin.reloadConfig();msg(sender,"Settings reloaded; saved military data untouched");}}
-                default -> help(sender);
-            }
-        }catch(Exception ex){
-            msg(sender,"Operation failed; no data was intentionally deleted. Check server console.");
-            plugin.getLogger().warning("Military command error: "+ex.getMessage());
+
+    MilitaryCommands(MilitaryPlugin plugin) {
+        this.plugin = plugin;
+    }
+
+    static void tell(CommandSender sender, String message) {
+        ((Audience) sender).sendMessage(Component.text("[Military] ", NamedTextColor.GOLD).append(Component.text(message, NamedTextColor.WHITE)));
+    }
+
+    private static void need(boolean condition, String message) {
+        if (!condition)
+            throw new IllegalArgumentException(message);
+    }
+
+    private static void length(String[] args, int count, String usage) {
+        need(args.length == count, "Use /nmilitary " + usage);
+    }
+
+    private static String arg(String[] args, int i) {
+        return i < args.length ? args[i] : "";
+    }
+
+    private static <E extends Enum<E>> E choice(Class<E> type, String input) {
+        try {
+            return Enum.valueOf(type, input.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Choose one of " + names(type) + ".");
         }
+    }
+
+    private static <E extends Enum<E>> List<String> names(Class<E> type) {
+        return Arrays.stream(type.getEnumConstants()).map(e -> key(e.name())).toList();
+    }
+
+    Nation nation(Player p) {
+        Nation n = plugin.nodes.nation(p);
+        need(n != null, "Join a Nodes nation first.");
+        return n;
+    }
+
+    Army army(Nation n, String name) {
+        Army a = plugin.state.armies.get(armyKey(n.getUuid(), name));
+        need(a != null, "This army does not exist in your nation.");
+        return a;
+    }
+
+    Division division(Army a, String name) {
+        Division d = a.divisions.get(key(name));
+        need(d != null, "Division not found in " + a.name + ".");
+        return d;
+    }
+
+    boolean national(Player p, Nation n) {
+        return p.hasPermission("nodesmilitary.admin") || !plugin.settings.marshal() || plugin.nodes.leadership(p, n) || (plugin.extra.installed() && (p.hasPermission("nodesextra.admin") || plugin.extra.snapshot().appointed(p.getUniqueId(), n.getUuid())));
+    }
+
+    boolean manages(Player p, Nation n, Army a) {
+        return p.getUniqueId().equals(a.commanderUuid) || national(p, n);
+    }
+
+    boolean commands(Player p, Nation n, Army a, Division d) {
+        return p.getUniqueId().equals(d.commanderUuid) || manages(p, n, a);
+    }
+
+    private void nationalRequired(Player p, Nation n) {
+        need(national(p, n), "National military authority required (sovereign, town leadership, Marshal, executive or admin).");
+    }
+
+    private void armyRequired(Player p, Nation n, Army a) {
+        need(manages(p, n, a), "Army command or national military authority required.");
+    }
+
+    private void divisionRequired(Player p, Nation n, Army a, Division d) {
+        need(commands(p, n, a, d), "Division, army or national command required.");
+    }
+
+    private Resident citizen(String name, Nation nation) {
+        return nation.getResidents().stream()
+                .filter(resident -> resident.getName().equalsIgnoreCase(name))
+                .findFirst().orElseThrow(() -> new IllegalArgumentException("Choose a citizen of your nation."));
+    }
+
+    private Territory location(Player p, Nation n) {
+        Territory t = plugin.nodes.current(p);
+        need(plugin.nodes.owned(t, n.getUuid()), "Stand in a territory owned by your nation in " + plugin.nodes.world() + ".");
+        return t;
+    }
+
+    public boolean onCommand(CommandSender sender, Command cmd, String alias, String[] args) {
+        execute(sender, args);
         return true;
     }
-    static Player player(CommandSender s){if(s instanceof Player p)return p;s.sendMessage("§c[Nodes-Military] Use this command in-game");return null;}
-    static void msg(CommandSender s,String line){s.sendMessage("§6[Nodes-Military] §f"+line);}
-    private boolean admin(CommandSender s){if(s.hasPermission("nodesmilitary.admin"))return true;msg(s,"Administrator permission required");return false;}
-    boolean manageNation(Player p,Nation nation){
-        if(p.hasPermission("nodesmilitary.admin")||p.hasPermission("nodesextra.admin"))return true;
-        if(nation==null || !plugin.nodes().citizen(p,nation))return false;
-        return !plugin.requireMarshal() || plugin.nodes().sovereign(p,nation) || plugin.nodes().townCommander(p,nation) || plugin.extra().marshalOrHead(p,nation);
-    }
-    boolean manageArmy(Player p,Nation nation,MilitaryState.Army army){
-        return army!=null && (manageNation(p,nation) || p.getUniqueId().toString().equals(army.commanderUuid));
-    }
-    boolean manageDivision(Player p,Nation nation,MilitaryState.Army army,MilitaryState.Division division){
-        return division!=null && (manageArmy(p,nation,army)||p.getUniqueId().toString().equals(division.commanderUuid));
-    }
-    private Nation nation(Player p){Nation n=plugin.nodes().nation(p);if(n==null)msg(p,"Join a Nodes nation first");return n;}
-    private boolean allowedRead(Player p,Nation n){return n!=null && (plugin.nodes().citizen(p,n)||p.hasPermission("nodesmilitary.admin"));}
-    List<MilitaryState.Army> armies(Nation nation){
-        if(nation==null)return List.of();
-        return plugin.state().armies.values().stream().filter(a->nation.getUuid().toString().equals(a.nationId)).sorted(Comparator.comparing(a->a.name.toLowerCase(Locale.ROOT))).toList();
-    }
-    MilitaryState.Army findArmy(Nation nation,String name){
-        if(nation==null)return null;
-        return armies(nation).stream().filter(a->a.name.equalsIgnoreCase(name)).findFirst().orElse(null);
-    }
-    MilitaryState.Division findDivision(MilitaryState.Army army,String name){
-        if(army==null)return null;
-        return army.divisions.values().stream().filter(d->d.name.equalsIgnoreCase(name)).findFirst().orElse(null);
-    }
-    private static boolean validName(String name){return name!=null&&name.matches("[A-Za-z0-9_-]{2,24}");}
-    private static String key(String name){return name.toLowerCase(Locale.ROOT);}
-    private void overview(CommandSender sender){
-        Player p=player(sender);if(p==null)return;
-        Nation n=nation(p);if(n==null)return;
-        List<MilitaryState.Army> armies=armies(n);
-        msg(sender,"§e"+n.getName()+"§f has "+armies.size()+" armies");
-        if(armies.isEmpty())msg(sender,"No armies yet. Leaders can create one with /nmilitary army create <name>");
-        for(MilitaryState.Army a:armies){
-            int total=a.divisions.values().stream().mapToInt(d->d.members.size()).sum();
-            msg(sender,"§e"+a.name+"§f: "+a.divisions.size()+" divisions, "+total+" enlisted; muster="+(a.musterTerritoryId==null?"unset":"#"+a.musterTerritoryId));
+
+    boolean execute(CommandSender sender, String... args) {
+        try {
+            need(sender.hasPermission("nodesmilitary.use"), "You do not have permission to use Nodes-Military.");
+            String root = key(arg(args, 0));
+            if (root.isEmpty())
+                root = sender instanceof Player && plugin.settings.gui() && plugin.settings.openMenu() ? "gui" : "help";
+            if (root.equals("help")) {
+                help(sender);
+                return true;
+            }
+            if (STAFF.contains(root)) {
+                staff(sender, root, args);
+                return true;
+            }
+            need(sender instanceof Player, "Use this action in game. Console commands include help, history, save and reload.");
+            Player p = (Player) sender;
+            if (root.equals("menu") || root.equals("gui")) {
+                need(plugin.settings.gui(), "Military menus are disabled. Use /nmilitary help.");
+                plugin.menus.home(p, 0);
+                return true;
+            }
+            if (root.equals("leave")) {
+                length(args, 1, "leave");
+                leave(p);
+                return true;
+            }
+            Nation n = nation(p);
+            switch(root) {
+                case "overview", "list" ->
+                    overview(p, n);
+                case "army" ->
+                    armyAction(p, n, args);
+                case "division" ->
+                    divisionAction(p, n, args);
+                case "enlist", "join" ->
+                    {
+                        length(args, 3, "enlist <army> <division>");
+                        Army a = army(n, args[1]);
+                        Division d = division(a, args[2]);
+                        need(plugin.state.membership(p.getUniqueId()) == null, "You are already enlisted. Leave your current division first.");
+                        need(d.members.size() < plugin.settings.maxMembers(), "This division is full.");
+                        d.members.add(p.getUniqueId());
+                        d.ranks.put(p.getUniqueId(), Rank.PRIVATE);
+                        change(p, "enlisted in " + a.name + " / " + d.name, "Enlisted in " + d.name + ".");
+                    }
+                case "muster" ->
+                    {
+                        length(args, 2, "muster <army>");
+                        Army a = army(n, args[1]);
+                        armyRequired(p, n, a);
+                        a.musterTerritoryId = plugin.nodes.id(location(p, n));
+                        a.musterWorld = p.getWorld().getName();
+                        change(p, "set " + a.name + " muster to #" + a.musterTerritoryId, "Muster set to #" + a.musterTerritoryId + ".");
+                    }
+                case "order" ->
+                    order(p, n, args);
+                case "report", "supply" ->
+                    {
+                        length(args, 2, "report <army>");
+                        report(p, n, army(n, args[1]));
+                    }
+                default ->
+                    throw new IllegalArgumentException("Unknown action. Use /nmilitary help.");
+            }
+            return true;
+        } catch (IllegalArgumentException ex) {
+            tell(sender, ex.getMessage());
+            return false;
+        } catch (Exception | LinkageError ex) {
+            plugin.getLogger().log(Level.SEVERE, "Military action failed", ex);
+            tell(sender, "The action failed. See the server console for details.");
+            return false;
         }
     }
-    private void army(CommandSender sender,String[] args){
-        if(args.length<2){msg(sender,"/nmilitary army <create|info|commander|disband> ...");return;}
-        Player p=player(sender);if(p==null)return;
-        Nation n=nation(p);if(n==null)return;
-        String mode=args[1].toLowerCase(Locale.ROOT);
-        if(args.length<3){msg(sender,"Specify an army name");return;}
-        String name=args[2];
-        MilitaryState.Army a=findArmy(n,name);
-        switch(mode){
-            case "create" -> {
-                if(!manageNation(p,n)){noAuthority(sender);return;}
-                if(!validName(name)){msg(sender,"Army name must have 2-24 letters, numbers, - or _");return;}
-                if(a!=null){msg(sender,"Army name already exists");return;}
-                if(armies(n).size()>=plugin.maxArmies()){msg(sender,"Maximum number of armies reached");return;}
-                a=new MilitaryState.Army();a.nationId=n.getUuid().toString();a.id=a.nationId+":"+key(name);
-                a.name=name;a.createdBy=p.getUniqueId().toString();a.createdAt=System.currentTimeMillis();
-                plugin.state().armies.put(a.id,a);plugin.audit(p.getName()+" created army "+a.name+" for "+n.getName());msg(sender,"Army "+a.name+" created");
-            }
-            case "info" -> {
-                if(a==null){msg(sender,"Army not found");return;}
-                msg(sender,"Army "+a.name+" | commander: "+plugin.nodes().citizenName(n,a.commanderUuid)+" | muster: "+(a.musterTerritoryId==null?"unset":"#"+a.musterTerritoryId));
-                for(MilitaryState.Division d:a.divisions.values())msg(sender,d.name+" ("+d.type+") "+d.members.size()+" members, order "+d.order);
-            }
-            case "commander" -> {
-                if(a==null||args.length<4){msg(sender,"/nmilitary army commander <army> <citizen>");return;}
-                if(!manageNation(p,n)){noAuthority(sender);return;}
-                Resident r=plugin.nodes().citizenByName(n,args[3]);if(r==null){msg(sender,"Citizen not found in your nation");return;}
-                a.commanderUuid=r.getUuid().toString();plugin.audit(p.getName()+" appointed "+r.getName()+" as commander of "+a.name);msg(sender,"Army commander appointed: "+r.getName());
-            }
-            case "disband" -> {
-                if(a==null){msg(sender,"Army not found");return;}
-                if(!manageArmy(p,n,a)){noAuthority(sender);return;}
-                plugin.state().armies.remove(a.id);plugin.audit(p.getName()+" disbanded army "+a.name);msg(sender,"Disbanded "+a.name+" and all its divisions");
-            }
-            default -> msg(sender,"/nmilitary army <create|info|commander|disband> ...");
+
+    private void change(Player p, String event, String feedback) {
+        plugin.record(p, event);
+        tell(p, feedback);
+    }
+
+    private void overview(Player p, Nation n) {
+        List<Army> armies = plugin.state.armies(n.getUuid());
+        tell(p, n.getName() + " has " + armies.size() + " armies.");
+        for (Army a : armies) tell(p, a.name + " · " + a.divisions.size() + " divisions · " + a.strength() + " personnel");
+    }
+
+    private void armyAction(Player p, Nation n, String[] args) {
+        String action = key(arg(args, 1));
+        if (args.length == 1 || (args.length == 2 && action.equals("list"))) {
+            overview(p, n);
+            return;
+        }
+        if ("create".equals(action)) {
+            length(args, 3, "army create <name>");
+            nationalRequired(p, n);
+            String name = args[2];
+            validateName(name);
+            String id = armyKey(n.getUuid(), name);
+            need(!plugin.state.armies.containsKey(id), "An army with that name already exists.");
+            need(plugin.state.armies(n.getUuid()).size() < plugin.settings.maxArmies(), "Your nation has reached its army limit.");
+            Army a = new Army();
+            a.id = id;
+            a.name = name;
+            a.nationId = n.getUuid();
+            a.createdBy = p.getUniqueId();
+            a.commanderUuid = p.getUniqueId();
+            a.createdAt = System.currentTimeMillis();
+            plugin.state.armies.put(id, a);
+            change(p, "established " + name + " for " + n.getName(), "Established " + name + ". You are its commander.");
+            return;
+        }
+        need(!action.equals("list") && ARMY.contains(action) && args.length >= 3, "Use /nmilitary army <create|info|commander|disband> <name>");
+        Army a = army(n, args[2]);
+        switch(action) {
+            case "info" ->
+                {
+                    length(args, 3, "army info <army>");
+                    tell(p, a.name + " · Commander " + plugin.nodes.name(a.commanderUuid) + " · " + a.strength() + " personnel · Muster " + muster(a));
+                    for (Division d : a.sortedDivisions()) tell(p, d.name + " · " + d.type + " · " + d.members.size() + " personnel · " + orderText(d));
+                }
+            case "commander" ->
+                {
+                    length(args, 4, "army commander <army> <player>");
+                    nationalRequired(p, n);
+                    Resident target = citizen(args[3], n);
+                    a.commanderUuid = target.getUuid();
+                    change(p, "appointed " + target.getName() + " commander of " + a.name, "Commander appointed.");
+                }
+            case "disband" ->
+                {
+                    length(args, 3, "army disband <army>");
+                    armyRequired(p, n, a);
+                    plugin.state.armies.remove(armyKey(n.getUuid(), a.name));
+                    change(p, "disbanded " + a.name, "Army disbanded.");
+                }
         }
     }
-    private void division(CommandSender sender,String[] args){
-        if(args.length<4){msg(sender,"/nmilitary division <create|commander|rank|roster|disband> <army> <division> ...");return;}
-        Player p=player(sender);if(p==null)return;
-        Nation n=nation(p);if(n==null)return;
-        MilitaryState.Army army=findArmy(n,args[2]);
-        if(army==null){msg(sender,"Army not found");return;}
-        String mode=args[1].toLowerCase(Locale.ROOT),name=args[3];
-        MilitaryState.Division div=findDivision(army,name);
-        switch(mode){
-            case "create" -> {
-                if(!manageArmy(p,n,army)){noAuthority(sender);return;}
-                if(args.length<5){msg(sender,"/nmilitary division create <army> <division> <type>");return;}
-                String type=args[4].toLowerCase(Locale.ROOT);
-                if(!validName(name)||!DIVISION_TYPES.contains(type)){msg(sender,"Invalid division name or type: "+String.join(", ",DIVISION_TYPES));return;}
-                if(div!=null){msg(sender,"Division already exists");return;}
-                if(army.divisions.size()>=plugin.maxDivisions()){msg(sender,"Maximum divisions reached");return;}
-                div=new MilitaryState.Division();div.id=key(name);div.name=name;div.type=type;
-                army.divisions.put(div.id,div);plugin.audit(p.getName()+" created "+type+" division "+name+" in "+army.name);msg(sender,"Division "+name+" created");
-            }
-            case "roster" -> {
-                if(div==null){msg(sender,"Division not found");return;}
-                msg(sender,"§e"+div.name+"§f ("+div.type+") members: "+div.members.size()+" / "+plugin.maxMembers());
-                for(String id:div.members)msg(sender,plugin.nodes().citizenName(n,id)+" — "+div.ranks.getOrDefault(id,"PRIVATE"));
-            }
-            case "commander" -> {
-                if(div==null||args.length<5){msg(sender,"/nmilitary division commander <army> <division> <enlisted-citizen>");return;}
-                if(!manageArmy(p,n,army)){noAuthority(sender);return;}
-                Resident r=plugin.nodes().citizenByName(n,args[4]);
-                if(r==null||!div.members.contains(r.getUuid().toString())){msg(sender,"Citizen must already be enlisted in this division");return;}
-                div.commanderUuid=r.getUuid().toString();plugin.audit(p.getName()+" appointed "+r.getName()+" to command "+div.name);msg(sender,"Division commander appointed");
-            }
-            case "rank" -> {
-                if(div==null||args.length<6){msg(sender,"/nmilitary division rank <army> <division> <citizen> <rank>");return;}
-                if(!manageDivision(p,n,army,div)){noAuthority(sender);return;}
-                Resident r=plugin.nodes().citizenByName(n,args[4]);String rank=args[5].toLowerCase(Locale.ROOT);
-                if(r==null||!div.members.contains(r.getUuid().toString())||!RANKS.contains(rank)){msg(sender,"Citizen must be enlisted; valid rank: "+RANKS);return;}
-                div.ranks.put(r.getUuid().toString(),rank.toUpperCase(Locale.ROOT));plugin.audit(p.getName()+" assigned "+r.getName()+" rank "+rank);msg(sender,"Rank updated");
-            }
-            case "disband" -> {
-                if(div==null){msg(sender,"Division not found");return;}
-                if(!manageArmy(p,n,army)){noAuthority(sender);return;}
-                army.divisions.remove(div.id);plugin.audit(p.getName()+" disbanded division "+div.name);msg(sender,"Division disbanded");
-            }
-            default -> msg(sender,"/nmilitary division <create|commander|rank|roster|disband> ...");
+
+    private static void validateName(String name) {
+        need(NAME.matcher(name).matches(), "Use 2–24 letters, numbers, underscores or hyphens.");
+    }
+
+    static String muster(Army a) {
+        return a.musterTerritoryId == null ? "unassigned" : "#" + a.musterTerritoryId + " in " + a.musterWorld;
+    }
+
+    static String orderText(Division d) {
+        return d.order + (d.targetTerritoryId == null ? "" : " #" + d.targetTerritoryId);
+    }
+
+    private void divisionAction(Player p, Nation n, String[] args) {
+        String action = key(arg(args, 1));
+        need(DIVISION.contains(action) && args.length >= 4, "Use /nmilitary division <create|commander|rank|roster|disband> <army> <division>");
+        Army a = army(n, args[2]);
+        if (action.equals("create")) {
+            length(args, 5, "division create <army> <name> <type>");
+            armyRequired(p, n, a);
+            validateName(args[3]);
+            String id = key(args[3]);
+            Type type = choice(Type.class, args[4].equalsIgnoreCase("reconnaissance") ? "RECON" : args[4]);
+            need(!a.divisions.containsKey(id), "That division already exists.");
+            need(a.divisions.size() < plugin.settings.maxDivisions(), "This army has reached its division limit.");
+            Division d = new Division();
+            d.id = id;
+            d.name = args[3];
+            d.type = type;
+            a.divisions.put(id, d);
+            change(p, "created " + d.name + " in " + a.name, "Created " + type + " division " + d.name + ".");
+            return;
+        }
+        Division d = division(a, args[3]);
+        switch(action) {
+            case "roster" ->
+                {
+                    length(args, 4, "division roster <army> <division>");
+                    tell(p, d.name + " · " + d.members.size() + " personnel");
+                    for (UUID id : d.members) tell(p, plugin.nodes.name(id) + " · " + d.rank(id) + (id.equals(d.commanderUuid) ? " · Commander" : ""));
+                }
+            case "disband" ->
+                {
+                    length(args, 4, "division disband <army> <division>");
+                    armyRequired(p, n, a);
+                    a.divisions.remove(key(d.name));
+                    change(p, "disbanded " + a.name + " / " + d.name, "Division disbanded.");
+                }
+            case "commander", "rank" ->
+                {
+                    boolean appoint = action.equals("commander");
+                    length(args, appoint ? 5 : 6, "division " + action + " <army> <division> <player>" + (appoint ? "" : " <rank>"));
+                    if (appoint)
+                        armyRequired(p, n, a);
+                    else
+                        divisionRequired(p, n, a, d);
+                    Resident target = citizen(args[4], n);
+                    UUID id = target.getUuid();
+                    need(d.members.contains(id), "The player must enlist in this division first.");
+                    if (appoint) {
+                        d.commanderUuid = id;
+                        if (d.rank(id).ordinal() < Rank.CAPTAIN.ordinal()) d.ranks.put(id, Rank.CAPTAIN);
+                        change(p, "appointed " + target.getName() + " commander of " + d.name, "Division commander appointed.");
+                    } else {
+                        Rank rank = choice(Rank.class, args[5]);
+                        d.ranks.put(id, rank);
+                        change(p, "set " + target.getName() + " to " + rank + " in " + d.name, "Rank set to " + rank + ".");
+                    }
+                }
         }
     }
-    private boolean enlisted(String uuid){
-        for(MilitaryState.Army army:plugin.state().armies.values())for(MilitaryState.Division d:army.divisions.values())if(d.members.contains(uuid))return true;
-        return false;
+
+    private void leave(Player p) {
+        UUID id = p.getUniqueId();
+        Division d = plugin.state.membership(id);
+        need(d != null, "You are not enlisted in a division.");
+        d.members.remove(id);
+        d.ranks.remove(id);
+        if (id.equals(d.commanderUuid))
+            d.commanderUuid = null;
+        change(p, "left " + d.name, "You left " + d.name + ".");
     }
-    private void enlist(CommandSender sender,String[] args){
-        if(args.length!=3){msg(sender,"/nmilitary enlist <army> <division>");return;}
-        Player p=player(sender);if(p==null)return;Nation n=nation(p);if(n==null)return;
-        MilitaryState.Army army=findArmy(n,args[1]);MilitaryState.Division div=findDivision(army,args[2]);
-        if(div==null){msg(sender,"Army/division not found in your nation");return;}
-        String uuid=p.getUniqueId().toString();
-        if(enlisted(uuid)){msg(sender,"You are already enlisted in a division. Use /nmilitary leave first");return;}
-        if(div.members.size()>=plugin.maxMembers()){msg(sender,"Division is full");return;}
-        div.members.add(uuid);div.ranks.put(uuid,"PRIVATE");plugin.audit(p.getName()+" enlisted in "+army.name+"/"+div.name);msg(sender,"Enlisted in "+div.name);
-    }
-    private void leave(CommandSender sender){
-        Player p=player(sender);if(p==null)return;String uuid=p.getUniqueId().toString();boolean changed=false;
-        for(MilitaryState.Army army:plugin.state().armies.values())for(MilitaryState.Division div:army.divisions.values()){
-            if(div.members.remove(uuid)){div.ranks.remove(uuid);if(uuid.equals(div.commanderUuid))div.commanderUuid=null;changed=true;}
+
+    private void order(Player p, Nation n, String[] args) {
+        length(args, 5, "order <army> <division> <hold|move|retreat> <territory-id>");
+        Army a = army(n, args[1]);
+        Division d = division(a, args[2]);
+        divisionRequired(p, n, a, d);
+        Order order = choice(Order.class, args[3]);
+        need(order != Order.UNASSIGNED, "Choose HOLD, MOVE or RETREAT.");
+        int target;
+        try {
+            target = Integer.parseInt(args[4]);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Enter a numeric territory ID.");
         }
-        if(changed){plugin.audit(p.getName()+" left their division");msg(sender,"You left the military division");}
-        else msg(sender,"You are not enlisted");
+        need(plugin.nodes.owned(plugin.nodes.at(target), n.getUuid()), "Orders must target a territory owned by your nation.");
+        d.order = order;
+        d.targetTerritoryId = target;
+        d.orderUpdatedAt = System.currentTimeMillis();
+        change(p, "ordered " + a.name + " / " + d.name + " to " + order + " #" + target, "Order recorded: " + order + " #" + target + ".");
     }
-    private void muster(CommandSender sender,String[] args){
-        if(args.length!=2){msg(sender,"/nmilitary muster <army>");return;}
-        Player p=player(sender);if(p==null)return;Nation n=nation(p);if(n==null)return;
-        MilitaryState.Army army=findArmy(n,args[1]);if(army==null){msg(sender,"Army not found");return;}
-        if(!manageArmy(p,n,army)){noAuthority(sender);return;}
-        Territory territory=plugin.nodes().territory(p);
-        if(!plugin.nodes().owns(territory,n)){msg(sender,"Stand in a territory owned by your nation");return;}
-        army.musterWorld=p.getWorld().getName();army.musterTerritoryId=plugin.nodes().id(territory);
-        plugin.audit(p.getName()+" set muster of "+army.name+" to #"+army.musterTerritoryId);msg(sender,"Muster changed to #"+army.musterTerritoryId);
-    }
-    private void order(CommandSender sender,String[] args){
-        if(args.length!=5){msg(sender,"/nmilitary order <army> <division> <hold|move|retreat> <territory-id>");return;}
-        Player p=player(sender);if(p==null)return;Nation n=nation(p);if(n==null)return;
-        MilitaryState.Army army=findArmy(n,args[1]);MilitaryState.Division div=findDivision(army,args[2]);
-        if(div==null){msg(sender,"Division not found");return;}
-        if(!manageDivision(p,n,army,div)){noAuthority(sender);return;}
-        String mode=args[3].toUpperCase(Locale.ROOT);
-        if(!Set.of("HOLD","MOVE","RETREAT").contains(mode)){msg(sender,"Invalid strategic order");return;}
-        int id;try{id=Integer.parseInt(args[4]);}catch(NumberFormatException ex){msg(sender,"Territory ID must be a number");return;}
-        if(!plugin.nodes().owns(plugin.nodes().territories().get(id),n)){msg(sender,"Order territory must be owned by your nation");return;}
-        div.order=mode;div.targetTerritoryId=id;div.orderUpdatedAt=System.currentTimeMillis();
-        plugin.audit(p.getName()+" ordered "+div.name+" to "+mode+" at #"+id);msg(sender,"Recorded "+mode+" for "+div.name+" at #"+id+" (strategic record only)");
-    }
-    private void report(CommandSender sender,String[] args){
-        if(args.length!=2){msg(sender,"/nmilitary report <army>");return;}
-        Player p=player(sender);if(p==null)return;Nation n=nation(p);if(n==null)return;
-        MilitaryState.Army army=findArmy(n,args[1]);if(army==null){msg(sender,"Army not found");return;}
-        msg(sender,army.name+" | divisions: "+army.divisions.size()+" | members: "+army.divisions.values().stream().mapToInt(d->d.members.size()).sum());
-        msg(sender,"Supply readiness: "+plugin.extra().report(army,n,plugin.maxHops()));
-    }
-    private void history(CommandSender sender){
-        if(!admin(sender))return;
-        List<String> logs=plugin.state().history;msg(sender,"Last "+Math.min(logs.size(),10)+" military changes:");
-        for(int i=Math.max(0,logs.size()-10);i<logs.size();i++)msg(sender,logs.get(i));
-    }
-    private static void noAuthority(CommandSender sender){msg(sender,"Leadership authority required (Marshal, executive, sovereign, town commander or appointed commander)");}
-    private void help(CommandSender sender){
-        msg(sender,"/nmilitary gui — open clickable military menu");
-        msg(sender,"/nmilitary overview | army <create|info|commander|disband> ...");
-        msg(sender,"/nmilitary division <create|roster|commander|rank|disband> ...");
-        msg(sender,"/nmilitary enlist <army> <division> | leave | muster <army>");
-        msg(sender,"/nmilitary order <army> <division> <hold|move|retreat> <territory-id>");
-        msg(sender,"/nmilitary report <army> | history | save | reload");
-        msg(sender,"All commands also work through /nodes military when the bridge is available");
-    }
-    @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args){
-        if(args.length==0)return List.of();
-        if(args.length==1)return matches(List.of("help","gui","overview","army","division","enlist","leave","muster","order","report","history","save","reload"),args[0]);
-        if(!(sender instanceof Player p))return List.of();Nation n=plugin.nodes().nation(p);
-        if(n==null)return List.of();
-        List<MilitaryState.Army> armies=armies(n);
-        if(args.length==2){
-            return switch(args[0].toLowerCase(Locale.ROOT)){
-                case "army" -> matches(List.of("create","info","commander","disband"),args[1]);
-                case "division" -> matches(List.of("create","roster","commander","rank","disband"),args[1]);
-                case "enlist","muster","report","order" -> matches(armies.stream().map(a->a.name).toList(),args[1]);
-                default -> List.of();
-            };
+
+    List<String> reportLines(Nation n, Army a) {
+        var lines = new ArrayList<String>();
+        lines.add(a.name + " · " + a.strength() + " personnel · " + a.divisions.size() + " divisions");
+        lines.add("Muster: " + muster(a));
+        if (a.musterTerritoryId == null) {
+            lines.add("Set a muster to check supply.");
+            return lines;
         }
-        if(args.length==3){
-            if(args[0].equalsIgnoreCase("army") && !args[1].equalsIgnoreCase("create"))return matches(armies.stream().map(a->a.name).toList(),args[2]);
-            if(args[0].equalsIgnoreCase("division"))return matches(armies.stream().map(a->a.name).toList(),args[2]);
-            if(args[0].equalsIgnoreCase("enlist")||args[0].equalsIgnoreCase("order")){
-                MilitaryState.Army a=findArmy(n,args[1]);return matches(a==null?List.of():a.divisions.values().stream().map(d->d.name).toList(),args[2]);
+        var extra = plugin.extra.snapshot();
+        if (extra.problem() != null) {
+            lines.add("Supply unavailable: " + extra.problem());
+            return lines;
+        }
+        if (!plugin.nodes.world().equals(a.musterWorld)) {
+            lines.add("Muster is outside the selected Nodes world.");
+            return lines;
+        }
+        var result = Supply.evaluate(plugin.nodes.friendlyGraph(n.getUuid()), extra.links().isEmpty() ? Map.of() : plugin.nodes.portGroups(), extra, n.getUuid(), a.musterWorld, a.musterTerritoryId, plugin.settings.hops(), System.currentTimeMillis());
+        lines.add("Supply: " + result.status());
+        if (result.depot() != null) {
+            var s = result.depot();
+            lines.add(s.name() + " · " + result.hops() + " territory hops");
+            lines.add("Food " + s.food() + " · Equipment " + s.equipment() + " · Fuel " + s.fuel());
+        }
+        return lines;
+    }
+
+    private void report(Player p, Nation n, Army a) {
+        for (String s : reportLines(n, a)) tell(p, s);
+    }
+
+    private void staff(CommandSender sender, String action, String[] args) throws Exception {
+        need(sender.hasPermission("nodesmilitary.admin"), "Military admin permission required.");
+        length(args, 1, action);
+        switch(action) {
+            case "history" ->
+                {
+                    var history = plugin.state.history;
+                    tell(sender, "Recent military events (" + history.size() + " retained)");
+                    history.subList(Math.max(0, history.size() - 12), history.size()).forEach(s -> tell(sender, s));
+                }
+            case "save" ->
+                {
+                    plugin.saveNow();
+                    tell(sender, "Military data saved.");
+                }
+            case "reload" ->
+                {
+                    plugin.reloadSettings();
+                    tell(sender, "Military settings reloaded.");
+                }
+        }
+    }
+
+    private void help(CommandSender p) {
+        tell(p, "Nodes-Military " + plugin.getDescription().getVersion() + " · /nmilitary or /nodes military");
+        for (var line : List.of("gui (menu) · overview (list, army list) · help", "army create|info|disband <army>", "army commander <army> <player>", "division create <army> <name> <type>", "division roster|disband <army> <division>", "division commander <army> <division> <player>", "division rank <army> <division> <player> <rank>", "enlist <army> <division> (join) · leave", "muster <army> · report <army> (supply)", "order <army> <division> <hold|move|retreat> <territory-id>")) tell(p, line);
+        if (p.hasPermission("nodesmilitary.admin"))
+            tell(p, "Staff: history · save · reload");
+    }
+
+    public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] args) {
+        if (!sender.hasPermission("nodesmilitary.use") || args.length == 0)
+            return List.of();
+        List<String> choices = new ArrayList<>();
+        int i = args.length - 1;
+        if (i == 0) {
+            choices.addAll(ROOTS);
+            if (sender.hasPermission("nodesmilitary.admin"))
+                choices.addAll(STAFF);
+        } else if (sender instanceof Player p && plugin.nodes.nation(p) != null) {
+            Nation n = plugin.nodes.nation(p);
+            String root = key(args[0]), act = key(arg(args, 1));
+            List<String> armies = plugin.state.armies(n.getUuid()).stream().map(a -> a.name).toList();
+            switch(root) {
+                case "army", "division" ->
+                    {
+                        if (i == 1)
+                            choices.addAll(root.equals("army") ? ARMY : DIVISION);
+                        else if (i == 2 && !(root.equals("army") && act.equals("create")))
+                            choices.addAll(armies);
+                        else if (root.equals("division") && i == 3 && !act.equals("create"))
+                            divisionNames(n, args[2], choices);
+                        else if (root.equals("division") && i == 4 && act.equals("create"))
+                            choices.addAll(List.of("infantry", "cavalry", "artillery", "engineers", "naval", "recon", "reconnaissance"));
+                        else if ((root.equals("army") && i == 3 && act.equals("commander")) || (root.equals("division") && i == 4 && Set.of("rank", "commander").contains(act))) {
+                            for (Resident target : n.getResidents())
+                                choices.add(target.getName());
+                        } else if (root.equals("division") && i == 5 && act.equals("rank"))
+                            choices.addAll(names(Rank.class));
+                    }
+                case "report", "supply", "enlist", "join", "muster", "order" ->
+                    {
+                        if (i == 1)
+                            choices.addAll(armies);
+                        else if (i == 2 && Set.of("order", "enlist", "join").contains(root))
+                            divisionNames(n, args[1], choices);
+                        else if (root.equals("order") && i == 3)
+                            choices.addAll(List.of("hold", "move", "retreat"));
+                        else if (root.equals("order") && i == 4) {
+                            Territory t = plugin.nodes.current(p);
+                            if (plugin.nodes.owned(t, n.getUuid()))
+                                choices.add(String.valueOf(plugin.nodes.id(t)));
+                        }
+                    }
             }
         }
-        if(args.length==4 && args[0].equalsIgnoreCase("division")){
-            MilitaryState.Army a=findArmy(n,args[2]);return matches(a==null?List.of():a.divisions.values().stream().map(d->d.name).toList(),args[3]);
-        }
-        if(args.length==5 && args[0].equalsIgnoreCase("division") && args[1].equalsIgnoreCase("create"))return matches(DIVISION_TYPES,args[4]);
-        if(args.length==4 && args[0].equalsIgnoreCase("order"))return matches(List.of("hold","move","retreat"),args[3]);
-        if(args.length==6 && args[0].equalsIgnoreCase("division") && args[1].equalsIgnoreCase("rank"))return matches(RANKS,args[5]);
-        return List.of();
+        String prefix = key(args[i]);
+        return choices.stream().filter(s -> key(s).startsWith(prefix)).sorted(String.CASE_INSENSITIVE_ORDER).toList();
     }
-    private static List<String> matches(Collection<String> values,String start){return values.stream().filter(s->s.toLowerCase(Locale.ROOT).startsWith(start.toLowerCase(Locale.ROOT))).sorted().toList();}
+
+    private void divisionNames(Nation n, String name, List<String> out) {
+        Army a = plugin.state.armies.get(armyKey(n.getUuid(), name));
+        if (a != null)
+            a.sortedDivisions().forEach(d -> out.add(d.name));
+    }
 }

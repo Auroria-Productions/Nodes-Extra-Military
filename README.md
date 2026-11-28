@@ -1,104 +1,130 @@
-# Nodes-Military v1.1.0
+# Nodes Military
 
-**Nodes-Military** is a Java 21 / Paper 1.21.x addon for **MilzzyNodes**, focused on nation armies, enlistment, commanders, division ranks, strategic orders and an in-game inventory GUI. It is independently maintained under **Auroria-Productions**.
+Nodes Military is Auroria Productions’ army and division addon for MilzzyNodes. Citizens can enlist, see who commands their division and read its current orders. Leaders can organise formations and set muster points through an in-game inventory menu or chat commands.
 
-> **New in v1.1.0:** GUI menus with permission-gated controls, optional Nodes-Extra supply reporting, safer saving with backups, and a complete source-based replacement build. The original ZIP supplied a v1.0.0 compiled JAR but not its Java sources. This version is a compatible-source **reimplementation** of the documented systems, not a recovered copy of that unavailable original source.
+[Download Nodes-Military.jar](https://github.com/Auroria-Productions/Nodes-Extra-Military/releases/download/v1.2.0/Nodes-Military.jar) · [Download the source ZIP](https://github.com/Auroria-Productions/Nodes-Extra-Military/releases/download/v1.2.0/Nodes-Military-1.2.0-Source.zip) · [Release notes](https://github.com/Auroria-Productions/Nodes-Extra-Military/releases/tag/v1.2.0)
 
-## Requirements
+## What the addon includes
 
-- Paper 1.21.x, **Java 21**.
-- Enabled **`milzzynodes`** core plugin. The adapter is compiled and checked against the 21 November 2026 core build, but other builds need compatibility testing.
-- **Nodes-Extra** is **optional**. With it installed, the plugin reads governments, supply depots and infrastructure from `plugins/Nodes-Extra/state.json` (read-only). Without it, armies, ranks, enlistment, GUI and orders still work.
+| System | In game |
+| --- | --- |
+| Military menu | Open your nation's armies, select a division and inspect its roster. The menu shows actions available to you. Leaders choose formation types, create units and manage personnel. |
+| Enlistment and ranks | Each citizen can enlist in one division across all nations. Commanders can appoint officers and assign one of eight ranks. |
+| Muster and orders | Set an army's muster in national territory. Give a division a recorded hold, move or retreat order with a friendly territory as its target. Players carry out the orders in game. |
+| Readiness | See personnel, divisions and muster location. With Nodes-Extra installed, check reachable depots, distance and stock. |
+| Administration and map data | Staff can read the event history, save and reload configuration. A separate public JSON feed exposes unit headcounts and orders. Player identities and ranks stay in the private save. |
 
-## Installation
+## Requirements and installation
 
-1. Stop Paper and back up `plugins/Nodes-Military/`, plus your core and Nodes-Extra folders.
-2. Delete or replace the previous `Nodes-Military.jar` from `plugins/`. **Do not run both versions simultaneously.**
-3. Upload the new **`Nodes-Military.jar`**, keeping your `milzzynodes.jar` in place.
-4. Restart Paper; check `/plugins` and the console for the enabled message.
-5. Use **`/nmilitary gui`** in-game. You can also use **`/nodes military gui`** when the shared `/nodes` command bridge is available.
-6. If using Nodes-Extra, run `/nextra save` once so supply reports can read its current snapshot.
+1. Run Paper with the Java version required by your server. Nodes Military targets Java 21 bytecode and Bukkit API 1.21. The release was checked on Paper **1.21.11 build 132** and **26.3 build 256** with Java 25.
+2. Install **Vault** and **MilzzyNodes dev.5.11** for the core. Install **Nodes-Extra 1.1.0** if you want depot reports or authority from a government office. Army management, rosters and orders work with the core alone.
+3. Stop the server. For an upgrade from Nodes-Military 1.0.0 or 1.1.0, back up `plugins/Nodes-Military/` and replace the old addon JAR. Keep the data directory and a single copy of the addon in `plugins/`.
+4. Start Paper. Run `nmilitary help` in the console. In game, join a Nodes nation and enter `/nmilitary` to open its menu.
 
-The first load reads existing `plugins/Nodes-Military/state.json` using the v1.0.0 schema. On each save it preserves a **`state.json.bak`** backup before atomically replacing the file. If the state is malformed or uses an unsupported schema, Nodes-Military stops rather than deleting it. Existing army/division names, commander UUIDs, enlistment, ranks, muster locations, orders and history remain representable.
+[MilzzyNodes core release](https://github.com/Auroria-Productions/Auroria-Nodes/releases/tag/v1.21-26.3-core-dev.5.11) · [Optional Nodes-Extra addon](https://github.com/Auroria-Productions/Nodes-Extra-) · [Default configuration](src/main/resources/config.yml) · [Plugin descriptor](src/main/resources/plugin.yml)
 
-## In-game GUI
+## Using the menu
 
-The six-row inventory GUI lets citizens browse their nation's army and divisions and **enlist** (or leave) by clicking. All actions are processed as the real player through the authoritative command handler; an item click cannot bypass military permissions.
+- **Create a formation.** Open `/nmilitary` and select **Create army**. Enter its name in chat. Open the army, select **Create division**, choose its type and enter the division name. Type `cancel` to exit a naming prompt.
+- **Enlist.** Select an army and division, then **Enlist**. Select a member to see the rank actions available to you. You can appoint a citizen who is offline. A division commander must already belong to that division.
+- **Set a location.** Stand in a territory your nation owns in the configured Nodes world. Use **Set muster here** on the army screen or **Issue order** on the division screen. Both the menu and chat commands accept a distant friendly territory ID.
+- **Review readiness.** Select an army and open **Readiness report**. Use the arrows to change pages or return to the previous screen. The menu asks for confirmation before a unit is disbanded.
 
-**Every nation citizen** can view army and division information, see current ranks, enlist in one division at a time, leave it, and request supply reports. **Authorised commanders and leaders** additionally see:
+## Command index
 
-- Create armies and divisions (choose a type, enter the name privately in chat).
-- Set an army muster territory at their current location.
-- Appoint army or division commanders from eligible citizens.
-- Change enlisted player ranks through a click-to-select menu.
-- Issue HOLD, MOVE or RETREAT strategic orders by territory ID.
-- Disband armies/divisions, with a separate confirmation screen.
+Every action below accepts all four prefixes. For example, `/nmilitary overview`, `/nmil overview`, `/nodesmilitary overview` and `/nodes military overview` show the same list. The `/nodes military` prefix uses the core's existing command handler. If another plugin owns that command, use one of the three direct prefixes.
 
-The GUI cancels inventory moves and drags, rechecks the nation when clicked, and accepts only 2–24-character safe names or numeric territory IDs as private chat inputs. Inputs expire after two minutes or on logout. **No chat text is broadcast while an input prompt is active.**
+### Players and citizens
 
-## Commands
+| Command | What it does | Who can use it |
+| --- | --- | --- |
+| `/nmilitary` | Open the menu by default. Console shows help. | Players or console |
+| `/nmilitary help` | Show commands and the staff actions available to you. | Players or console |
+| `/nmilitary gui` or `menu` | Open the inventory menu explicitly. | Players |
+| `/nmilitary overview` or `list` | List the nation's armies and their strength. | Citizens |
+| `/nmilitary army` or `army list` | Open the same army list in chat. | Citizens |
+| `/nmilitary army info <army>` | Show its commander, muster point and divisions. | Citizens |
+| `/nmilitary division roster <army> <division>` | List enlisted members, ranks and commander. | Citizens |
+| `/nmilitary enlist <army> <division>` or `join <army> <division>` | Enlist as a private. | Citizens |
+| `/nmilitary leave` | Leave your current division, including after a change of nation. | Enlisted players |
+| `/nmilitary report <army>` or `supply <army>` | Show strength, muster location and available depot information. | Citizens |
 
-| Command | Purpose | Access |
-|---|---|---|
-| `/nmilitary gui` | Open military GUI | Nation citizen |
-| `/nmilitary overview` | View your nation's armies | Citizen |
-| `/nmilitary army create <name>` | Create army | National leader / Marshal / admin |
-| `/nmilitary army info <army>` | Inspect army | Citizen |
-| `/nmilitary army commander <army> <citizen>` | Appoint army commander | National leadership |
-| `/nmilitary army disband <army>` | Remove army | National leadership / army commander |
-| `/nmilitary division create <army> <division> <type>` | Add formation | National leadership / army commander |
-| `/nmilitary division commander <army> <division> <citizen>` | Appoint enlisted commander | National leadership / army commander |
-| `/nmilitary division roster <army> <division>` | View names/ranks in chat | Citizen |
-| `/nmilitary division rank <army> <division> <citizen> <rank>` | Promote/demote enlisted member | National, army or division commander |
-| `/nmilitary division disband <army> <division>` | Remove division | National leadership / army commander |
-| `/nmilitary enlist <army> <division>` | Join a division | Nation citizen |
-| `/nmilitary leave` | Leave current division | Enlisted citizen |
-| `/nmilitary muster <army>` | Set own-territory muster | National leadership / army commander |
-| `/nmilitary order <army> <division> <hold\|move\|retreat> <territory-id>` | Log strategic order on owned territory | National, army or division commander |
-| `/nmilitary report <army>` | Strength and supply readiness | Citizen |
-| `/nmilitary history` | Audit history | Admin |
-| `/nmilitary save` / `/nmilitary reload` | Persist state / reload settings | Admin |
+### Formations and command
 
-Use **`/nodes military ...`** for the same commands if your core `/nodes` executor is available. The original `/nodes` subcommands and Nodes-Extra routing are passed through untouched. Allowed formation types: `infantry`, `cavalry`, `artillery`, `engineers`, `naval`, `reconnaissance`. Ranks: Private, Corporal, Sergeant, Lieutenant, Captain, Major, Colonel, General.
+| Command | What it does | Required authority |
+| --- | --- | --- |
+| `/nmilitary army create <name>` | Create an army. The founder becomes its commander. | National |
+| `/nmilitary army commander <army> <player>` | Appoint a citizen as army commander. | National |
+| `/nmilitary army disband <army>` | Remove the army, its divisions and their enlistments. | Army command |
+| `/nmilitary division create <army> <division> <type>` | Create a division of the chosen type. | Army command |
+| `/nmilitary division commander <army> <division> <player>` | Appoint an enlisted citizen as commander. The appointee receives at least captain rank. | Army command |
+| `/nmilitary division rank <army> <division> <player> <rank>` | Change an enlisted citizen's rank, including while offline. | Division command |
+| `/nmilitary division disband <army> <division>` | Remove a division and release its members. | Army command |
+| `/nmilitary muster <army>` | Set the army's muster at your current owned territory. | Army command |
+| `/nmilitary order <army> <division> <order> <territory-id>` | Record an order targeting a territory owned by your nation. | Division command |
 
-## Authority and safety
+**National authority** includes the capital sovereign, the leaders, officers and generals of the nation's towns, and holders of `nodesmilitary.admin` within their nation. When Nodes-Extra is enabled its government head, Marshal and `nodesextra.admin` also qualify. **Army command** includes the army commander and national authorities. **Division command** also includes that division's commander.
 
-- `nodesmilitary.use`: default **everyone**; nation and role checks apply separately.
-- `nodesmilitary.admin`: default **OP**; may administer global state.
-- `nodesextra.admin`: also recognised for leadership authority.
-- Nation **capital sovereign, town officers/generals/leaders, Nodes-Extra Marshal and government head** can manage national military state; army and division commanders manage their assigned formations.
-- Command permissions are checked again on every GUI mutation. Other nations' armies cannot be edited by guessing names.
-- Division membership is one division per player across all armies. A division must have capacity for enlistment.
-- Muster/strategic order target territories must belong to the issuing nation's territory network.
-- A failed/unparseable save is not overwritten. A timestamped audit trail is maintained in the private state.
+| Argument | Accepted values |
+| --- | --- |
+| Army and division names | 2–24 letters, numbers, underscores or hyphens. Name lookups ignore case. |
+| Division type | `infantry`, `cavalry`, `artillery`, `engineers`, `naval`, `recon` (also `reconnaissance`) |
+| Rank | `private`, `corporal`, `sergeant`, `lieutenant`, `captain`, `major`, `colonel`, `general` |
+| Order | `hold`, `move`, `retreat` |
 
-## Nodes-Extra supply integration
+### Staff
 
-The integration is **read-only**. If present, Nodes-Military checks for stocked and unblocked depots connected through owned territories and Nodes-Extra sea links backed by shared native Nodes port groups. Ordinary road/rail links reuse native territory adjacency. Reports include SUPPLIED / LIMITED / BLOCKADED / EMPTY / UNSUPPLIED. No depot stock is consumed and no combat benefits are applied. With Nodes-Extra absent, the report says **Nodes-Extra not installed**.
+| Command | What it does |
+| --- | --- |
+| `/nmilitary history` | Show the latest 12 events from the 200 retained in the private save. |
+| `/nmilitary save` | Write private state and refresh the configured public feed. Waits for the write to finish. |
+| `/nmilitary reload` | Reload settings and reschedule periodic saving. Changes to JSON filenames require a stopped-server migration. |
 
-## Configuration and files
+`nodesmilitary.use` defaults to everyone. Staff commands require `nodesmilitary.admin`, which defaults to operators. Staff commands work from the server console.
 
-In `plugins/Nodes-Military/config.yml`: `military.requireMarshalAuthority`, max armies (6), divisions (8), members (50), supply hops (12), `gui.enabled`, `map.exportPublicData`, and save interval (120 seconds).
+## Configuration and saved data
 
-- `plugins/Nodes-Military/state.json`: **private** enlistments, UUIDs, military state and audit history. Never publish this file.
-- `plugins/Nodes-Military/state.json.bak`: previous state backup.
-- `plugins/Nodes-Military/public.json`: public army/division overview without member UUIDs, member names or private government data. The MilzzyNodesMap viewer needs its own overlay code to render this feed.
+| Configuration | Default | Effect |
+| --- | --- | --- |
+| `gui.enabled` | `true` | Enable the inventory interface. All chat actions are available independently. |
+| `gui.title` | `Nodes Military` | Title of the army browser. |
+| `gui.openOnCommand` | `true` | Open the menu with a bare command. Set to `false` for text help by default. |
+| `military.requireMarshalAuthority` | `true` | Require national leadership for national management. Set to `false` to extend that authority to all citizens. |
+| `military.maxArmiesPerNation` | `6` | Maximum armies per nation, from 1 to 50. |
+| `military.maxDivisionsPerArmy` | `8` | Maximum divisions per army, from 1 to 30. |
+| `military.maxMembersPerDivision` | `50` | Maximum enlisted members per division, from 1 to 500. |
+| `military.supply.maxTerritoryHops` | `12` | Maximum route length to a depot, from 1 to 50. |
+| `map.exportPublicData` | `true` | Generate the public JSON feed. Turning this off removes the previously generated feed on save. |
+| `storage.saveIntervalSeconds` | `120` | Periodic retry and nation-name refresh, from 20 to 3,600 seconds. Mutations also queue a save. |
+| `storage.stateFilename` | `state.json` | Private armies, player UUIDs, ranks, orders and audit events. |
+| `storage.publicFilename` | `public.json` | Nation and army identifiers, muster location, division headcounts and orders for map integrations. |
 
-## Source and building
+The previous distinct private save is retained as `state.json.bak` when using the default filename. Both JSON files live in `plugins/Nodes-Military/`. Only the public feed is intended for a web viewer. Displaying it on NodesMap requires a viewer that reads this feed. Existing 1.0.0 configurations use the new GUI defaults when the two GUI keys are absent.
 
-This repository includes the Java 21 source, local `build.sh`, tests, and **CI-only Nodes API signature stubs** used in GitHub Actions to build without publishing the core plugin. Stub classes are excluded from the production JAR. For a stronger local compatibility build, compile against **your actual core**:
+### Reading a supply report
 
-```bash
-PAPER_API=/path/to/paper-api-1.21.jar \
-NODES_JAR=/path/to/milzzynodes.jar \
-DEPS_DIR=/path/to/Paper/dependencies \
+The report searches from the muster point along connected, nationally owned territory, including validated sea links between friendly ports that share a group. Of reachable, unblocked depots with stock, it selects the nearest. At equal distance it prefers a depot with both food and equipment.
+
+| Status | Meaning |
+| --- | --- |
+| `SUPPLIED` | The selected depot has food and equipment. |
+| `LIMITED` | The selected depot has stock but lacks food or equipment. |
+| `EMPTY` | A reachable depot is open and empty, and none can supply the army. |
+| `BLOCKADED` | All reachable depots are under blockade. |
+| `UNSUPPLIED` | No eligible depot is reachable, or the nation has lost the muster territory. |
+
+Nodes Military reads the Nodes-Extra state file named in its configuration. If the report is waiting for the first snapshot, run `/nextra save` as an admin and allow up to five seconds for refresh. The check leaves supplies in the depot.
+
+## Building from source
+
+Use JDK 21, Bash, curl, unzip, Python 3 and `sha256sum`. Extract the named source ZIP or clone the repository, then run the following in its root directory.
+
+```sh
 bash build.sh
 ```
 
-GitHub Actions builds `Nodes-Military.jar` and attaches it and `Nodes-Military-v1.1.0-Source.zip` to the release. **The original v1.0.0 compiled JAR has no matching original Java source in the supplied ZIP.** This v1.1.0 source is a functional reimplementation that retains compatible file field names.
+The build fetches a pinned core JAR and compile libraries from Auroria Nodes, verifies their SHA-256 digests, compiles the addon, runs the regression tests and writes `dist/Nodes-Military.jar`. To build offline, set `NODES_JAR` and `NODES_COMPILE_LIBS` to absolute paths to your local copies. The release JAR contains the addon classes and its Paper resources.
 
-## Validation and limitations
+The Maven entry point, `mvn package`, runs the same build and places the verified JAR in `target/Nodes-Military.jar`. The release source was reconstructed from the supplied 1.0.0 distribution and checked against the subsequent 1.1.0 source.
 
-Verified offline with the 21 November 2026 MilzzyNodes core signature JAR: Java 21 compilation, save/round-trip tests, malformed state fail-closed handling, and graph routing limits. A live server with two players has **not** been tested here: confirm GUI clicks, permissions, enlistment, and `/nodes` command chaining on a staging Paper server before replacing production. Strategic orders are **record-only**: they do not teleport armies, capture land, grant buffs or start wars. MilzzyNodesMap overlays are not bundled. Folia is not supported.
-
-**License:** GNU GPLv3; retain original attribution and license notices.
+[Java source](src/main/java/com/auroria/nodesmilitary) · [Regression tests](src/test/java/com/auroria/nodesmilitary/MilitaryTests.java) · [Test results](TEST_REPORT.md) · [Changelog](CHANGELOG.md) · [GPLv3 license](LICENSE) · [Archived Nodes-Extra package](https://github.com/Auroria-Productions/Nodes-Extra-Military/tree/legacy/nodes-extra)

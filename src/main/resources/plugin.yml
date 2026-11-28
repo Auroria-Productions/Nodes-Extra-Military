@@ -1,22 +1,22 @@
 name: Nodes-Military
 main: com.auroria.nodesmilitary.MilitaryPlugin
-version: 1.1.0
+version: 1.2.0
 api-version: '1.21'
+description: National armies, division rosters, strategic orders and logistics for MilzzyNodes
 authors: [Auroria-Productions]
-description: Military organisations, ranks, strategic commands and secure inventory GUIs for MilzzyNodes
 folia-supported: false
 depend: [milzzynodes]
 softdepend: [Nodes-Extra]
 commands:
   nmilitary:
-    description: Nodes-Military commands and GUI
+    description: Open the military menu or manage your nation's forces
     aliases: [nodesmilitary, nmil]
     permission: nodesmilitary.use
     usage: /nmilitary help
 permissions:
   nodesmilitary.use:
-    description: Use national military commands and menus
+    description: Open the menu and use commands subject to citizenship and role checks
     default: true
   nodesmilitary.admin:
-    description: Global military administration
+    description: Manage formations in your nation and use server-wide maintenance commands
     default: op

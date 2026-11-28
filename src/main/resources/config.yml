@@ -1,20 +1,27 @@
-# Nodes-Military v1.1.0
-# Requires milzzynodes. Nodes-Extra is optional and read-only.
+# Nodes-Military 1.2.0
 military:
+  # When false, every citizen may manage their nation's formations.
   requireMarshalAuthority: true
   maxArmiesPerNation: 6
   maxDivisionsPerArmy: 8
   maxMembersPerDivision: 50
+
   supply:
+    # Maximum friendly territory edges from headquarters to a Nodes-Extra depot.
     maxTerritoryHops: 12
-# Citizens see their own nation, division, enlistment and supply reports.
-# Management buttons are shown only to the authorised hierarchy.
+
 gui:
   enabled: true
+  # When false, bare /nmilitary shows help. /nmilitary gui still opens the menu.
+  openOnCommand: true
   title: "Nodes Military"
+
 map:
+  # Disabling export removes the previously generated public feed.
   exportPublicData: true
+
 storage:
+  # Retry unsaved data and refresh changes to nation names at this interval.
   saveIntervalSeconds: 120
   stateFilename: state.json
   publicFilename: public.json

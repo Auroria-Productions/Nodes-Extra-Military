@@ -1,78 +1,139 @@
 package com.auroria.nodesmilitary;
 
-import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
+import java.io.File;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.*;
 import java.util.logging.Level;
 
-/** Nodes-Military v1.1.0; replacement for v1.0.0 with compatible data schema and in-game GUIs. */
 public final class MilitaryPlugin extends JavaPlugin {
-    private MilitaryState.State state;
-    private NodesBridge nodes;
-    private ExtraBridge extra;
-    private MilitaryGui gui;
+
+    MilitaryState state;
+
+    NodeAccess nodes;
+
+    ExtraBridge extra;
+
+    Settings settings;
+
+    Menus menus;
+
+    MilitaryCommands commands;
+
+    private Storage storage;
+
     private NodesCommandHook hook;
-    private BukkitTask task;
-    private Path statePath,publicPath;
-    @Override public void onEnable(){
-        if(!Bukkit.getPluginManager().isPluginEnabled("milzzynodes")){
-            getLogger().severe("milzzynodes is required");Bukkit.getPluginManager().disablePlugin(this);return;
-        }
+
+    private BukkitTask periodic, queued;
+
+    private Map<UUID, String> lastNames = Map.of();
+
+    private long revision;
+
+    private boolean ready;
+
+    @Override
+    public void onEnable() {
         saveDefaultConfig();
         try {
-            nodes=new NodesBridge();
-            statePath=safePath(getConfig().getString("storage.stateFilename","state.json"));
-            publicPath=safePath(getConfig().getString("storage.publicFilename","public.json"));
-            state=MilitaryStorage.load(statePath);
-        }catch(Exception ex){
-            getLogger().log(Level.SEVERE,"Cannot load Nodes-Military state; original file will not be overwritten",ex);
-            Bukkit.getPluginManager().disablePlugin(this);return;
+            settings = Settings.load(new File(getDataFolder(), "config.yml"));
+            var core = getServer().getPluginManager().getPlugin("milzzynodes");
+            if (!(core instanceof JavaPlugin jp) || !jp.isEnabled())
+                throw new IOException("Enable milzzynodes first.");
+            nodes = new NodeAccess(jp);
+            storage = new Storage(getDataFolder().toPath(), settings.stateFile(), settings.publicFile(), getLogger());
+            state = storage.load();
+            extra = new ExtraBridge(this);
+            extra.bind();
+            commands = new MilitaryCommands(this);
+            menus = new Menus(this);
+            var cmd = Objects.requireNonNull(getCommand("nmilitary"));
+            cmd.setExecutor(commands);
+            cmd.setTabCompleter(commands);
+            hook = NodesCommandHook.install(this, cmd);
+            var manager = getServer().getPluginManager();
+            manager.registerEvents(menus, this);
+            manager.registerEvents(extra, this);
+            getServer().getScheduler().runTaskTimerAsynchronously(this, extra::refresh, 1L, 100L);
+            schedulePeriodic();
+            ready = true;
+            saveNow();
+            getLogger().info("Loaded " + state.armies.size() + " armies. Nodes-Extra integration " + (extra.installed() ? "active." : "optional and currently offline."));
+        } catch (Exception | LinkageError e) {
+            ready = false;
+            getLogger().log(Level.SEVERE, "Nodes-Military could not start: " + e.getMessage(), e);
+            getServer().getPluginManager().disablePlugin(this);
         }
-        extra=new ExtraBridge(this);
-        MilitaryCommands commands=new MilitaryCommands(this);
-        Objects.requireNonNull(getCommand("nmilitary"),"nmilitary missing in plugin.yml").setExecutor(commands);
-        Objects.requireNonNull(getCommand("nmilitary")).setTabCompleter(commands);
-        gui=new MilitaryGui(this);
-        Bukkit.getPluginManager().registerEvents(gui,this);
-        hook=NodesCommandHook.install(this,commands);
-        long seconds=Math.max(20,Math.min(3600,getConfig().getLong("storage.saveIntervalSeconds",120)));
-        task=Bukkit.getScheduler().runTaskTimer(this,this::persist,seconds*20L,seconds*20L);
-        getLogger().info("Nodes-Military v1.1.0 enabled; armies="+state.armies.size()+", GUI enabled="+getConfig().getBoolean("gui.enabled",true)+", Nodes-Extra optional");
     }
-    @Override public void onDisable(){
-        if(task!=null)task.cancel();
-        if(hook!=null)hook.uninstall();
-        if(gui!=null)gui.shutdown();
-        if(state!=null && nodes!=null)persist();
+
+    private void schedulePeriodic() {
+        if (periodic != null)
+            periodic.cancel();
+        long ticks = settings.interval() * 20L;
+        periodic = getServer().getScheduler().runTaskTimer(this, () -> {
+            Map<UUID, String> names = nodes.nationNames();
+            if (!names.equals(lastNames))
+                revision++;
+            if (storage.savedRevision() < revision)
+                submit(names);
+        }, ticks, ticks);
     }
-    private Path safePath(String configured){
-        String name=configured==null?"":configured.trim();
-        if(!name.matches("[A-Za-z0-9_.-]+\\.json") || name.equals(".."))throw new IllegalArgumentException("Invalid state filename: "+configured);
-        return getDataFolder().toPath().resolve(name);
+
+    void record(Player actor, String event) {
+        state.record(actor.getName() + " " + event);
+        revision++;
+        if (queued == null)
+            queued = getServer().getScheduler().runTask(this, () -> {
+                queued = null;
+                submit(nodes.nationNames());
+            });
     }
-    synchronized void persist(){
-        if(state==null)return;
-        try {
-            MilitaryStorage.save(statePath,state);
-            if(getConfig().getBoolean("map.exportPublicData",true))MilitaryStorage.export(publicPath,state,nodes);
-        }catch(IOException ex){getLogger().log(Level.SEVERE,"Failed to save Nodes-Military; state remains in memory",ex);}
+
+    private void submit(Map<UUID, String> names) {
+        lastNames = names;
+        storage.submit(new Storage.Snapshot(revision, Storage.JSON.toJsonTree(state), settings.export() ? Storage.publicFeed(state, names) : null));
     }
-    void audit(String message){
-        state.history.add(System.currentTimeMillis()+" "+message);
-        if(state.history.size()>300)state.history.subList(0,state.history.size()-300).clear();
-        persist();
+
+    void saveNow() throws IOException {
+        if (queued != null) {
+            queued.cancel();
+            queued = null;
+        }
+        submit(nodes.nationNames());
+        storage.await(revision);
     }
-    MilitaryState.State state(){return state;}
-    NodesBridge nodes(){return nodes;}
-    ExtraBridge extra(){return extra;}
-    MilitaryGui gui(){return gui;}
-    int maxArmies(){return bound("military.maxArmiesPerNation",6,1,50);}
-    int maxDivisions(){return bound("military.maxDivisionsPerArmy",8,1,100);}
-    int maxMembers(){return bound("military.maxMembersPerDivision",50,1,500);}
-    int maxHops(){return bound("military.supply.maxTerritoryHops",12,0,128);}
-    private int bound(String setting,int fallback,int low,int high){return Math.max(low,Math.min(high,getConfig().getInt(setting,fallback)));}
-    boolean requireMarshal(){return getConfig().getBoolean("military.requireMarshalAuthority",true);}
+
+    void reloadSettings() throws Exception {
+        Settings next = Settings.load(new File(getDataFolder(), "config.yml"));
+        if (!settings.stateFile().equals(next.stateFile()) || !settings.publicFile().equals(next.publicFile()))
+            throw new IllegalArgumentException("Stop the server and migrate the JSON files before changing their names.");
+        settings = next;
+        revision++;
+        schedulePeriodic();
+        extra.bind();
+        if (!settings.gui())
+            menus.closeAll();
+        saveNow();
+    }
+
+    @Override
+    public void onDisable() {
+        if (hook != null)
+            hook.uninstall();
+        if (menus != null)
+            menus.closeAll();
+        if (periodic != null)
+            periodic.cancel();
+        if (ready)
+            try {
+                saveNow();
+            } catch (Exception e) {
+                getLogger().log(Level.SEVERE, "Final military save failed", e);
+            }
+        if (storage != null)
+            storage.close();
+        ready = false;
+    }
 }

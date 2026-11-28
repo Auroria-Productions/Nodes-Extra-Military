@@ -1,39 +1,60 @@
 package com.auroria.nodesmilitary;
 
-import org.bukkit.Bukkit;
 import org.bukkit.command.*;
 import java.util.*;
 
-/** Wraps the current /nodes executor without stealing other namespaces from MilzzyNodes or Nodes-Extra. */
-final class NodesCommandHook implements CommandExecutor,TabCompleter {
-    private final PluginCommand command;
+final class NodesCommandHook implements TabExecutor {
+
+    private final PluginCommand root, military;
+
     private final CommandExecutor previous;
-    private final TabCompleter previousComplete;
-    private final MilitaryCommands military;
-    private NodesCommandHook(PluginCommand command,MilitaryCommands military){
-        this.command=command;this.previous=command.getExecutor();this.previousComplete=command.getTabCompleter();this.military=military;
+
+    private final TabCompleter completions;
+
+    private NodesCommandHook(PluginCommand root, PluginCommand military) {
+        this.root = root;
+        this.military = military;
+        previous = root.getExecutor();
+        completions = root.getTabCompleter();
     }
-    static NodesCommandHook install(MilitaryPlugin plugin,MilitaryCommands commands){
-        PluginCommand command=Bukkit.getPluginCommand("nodes");
-        if(command==null || command.getPlugin()==plugin || !command.getPlugin().getName().equalsIgnoreCase("milzzynodes")){
-            plugin.getLogger().warning("/nodes command bridge unavailable; /nmilitary remains usable");return null;
+
+    static NodesCommandHook install(MilitaryPlugin plugin, PluginCommand military) {
+        PluginCommand root = plugin.getServer().getPluginCommand("nodes");
+        var core = plugin.getServer().getPluginManager().getPlugin("milzzynodes");
+        if (root == null || root.getPlugin() != core || root.getExecutor() == null) {
+            plugin.getLogger().warning("The /nodes command belongs to another plugin or is unavailable. Use /nmilitary.");
+            return null;
         }
-        NodesCommandHook hook=new NodesCommandHook(command,commands);
-        command.setExecutor(hook);command.setTabCompleter(hook);
+        var hook = new NodesCommandHook(root, military);
+        root.setExecutor(hook);
+        root.setTabCompleter(hook);
         return hook;
     }
-    void uninstall(){if(command.getExecutor()==this)command.setExecutor(previous);if(command.getTabCompleter()==this)command.setTabCompleter(previousComplete);}
-    @Override public boolean onCommand(CommandSender sender,Command command,String alias,String[] args){
-        if(args.length>0 && args[0].equalsIgnoreCase("military"))
-            return military.onCommand(sender,command,"nodes military",Arrays.copyOfRange(args,1,args.length));
-        return previous==null || previous.onCommand(sender,command,alias,args);
+
+    void uninstall() {
+        if (root.getExecutor() == this)
+            root.setExecutor(previous);
+        if (root.getTabCompleter() == this)
+            root.setTabCompleter(completions);
     }
-    @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args){
-        if(args.length>0 && args[0].equalsIgnoreCase("military"))
-            return military.onTabComplete(sender,command,alias,Arrays.copyOfRange(args,1,args.length));
-        List<String> prior=previousComplete==null?List.of():previousComplete.onTabComplete(sender,command,alias,args);
-        List<String> result=new ArrayList<>(prior==null?List.of():prior);
-        if(args.length==1 && "military".startsWith(args[0].toLowerCase(Locale.ROOT)) && !result.contains("military"))result.add("military");
-        return result;
+
+    public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+        if (args.length > 0 && args[0].equalsIgnoreCase("military") && military.getPlugin().isEnabled())
+            return military.execute(sender, "nmilitary", Arrays.copyOfRange(args, 1, args.length));
+        return previous.onCommand(sender, cmd, label, args);
+    }
+
+    public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] args) {
+        if (args.length > 1 && args[0].equalsIgnoreCase("military") && military.getPlugin().isEnabled())
+            return military.testPermissionSilent(sender) ? military.tabComplete(sender, "nmilitary", Arrays.copyOfRange(args, 1, args.length)) : List.of();
+        TabCompleter delegate = completions != null ? completions : previous instanceof TabCompleter c ? c : null;
+        List<String> result = delegate == null ? null : delegate.onTabComplete(sender, cmd, alias, args);
+        if (args.length != 1 || !military.getPlugin().isEnabled() || !military.testPermissionSilent(sender) || !"military".startsWith(args[0].toLowerCase(Locale.ROOT)))
+            return result;
+        var merged = new LinkedHashSet<String>();
+        if (result != null)
+            merged.addAll(result);
+        merged.add("military");
+        return List.copyOf(merged);
     }
 }

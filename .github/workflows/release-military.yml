@@ -1,107 +1,73 @@
-name: Build and publish Nodes-Military v1.1.0
-
+name: Build and publish Nodes Military
 on:
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/release-military.yml'
-      - 'release-inputs/nodes-military-source-v1.1.0.tar.xz'
+    paths: ['.github/workflows/release-military.yml']
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 concurrency:
   group: nodes-military-release
   cancel-in-progress: false
 
 jobs:
-  build:
+  release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      TAG: v1.2.0
+      SOURCE_NAME: Nodes-Military-1.2.0-Source.zip
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Verify and import full source archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -s release-inputs/nodes-military-source-v1.1.0.tar.xz
-          echo "a4c898ebe43e0a4fa23dc701639453497e52b4d97b3771d92b46c82c97a23798  release-inputs/nodes-military-source-v1.1.0.tar.xz" | sha256sum -c -
-          tar -tJf release-inputs/nodes-military-source-v1.1.0.tar.xz > /dev/null
-          tar -xJf release-inputs/nodes-military-source-v1.1.0.tar.xz -C .
-          test -f src/main/java/com/auroria/nodesmilitary/MilitaryGui.java
-          test -f src/main/resources/plugin.yml
-          test -f src/test/java/com/auroria/nodesmilitary/MilitaryRegressionTest.java
-
-      - name: Set up Java 21
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-          cache: maven
-
-      - name: Build Nodes-Military JAR
-        shell: bash
+      - name: Rebuild, test and verify the released payload
         run: |
-          set -euo pipefail
-          mvn -B -ntp -DskipTests package
-          mkdir -p dist
-          cp target/Nodes-Military.jar dist/Nodes-Military.jar
-          unzip -t dist/Nodes-Military.jar | tail -1
-          unzip -p dist/Nodes-Military.jar plugin.yml | grep -F 'version: 1.1.0'
-          if jar tf dist/Nodes-Military.jar | grep -E '^(phonon/nodes/|net/md_5/bungee/)'; then
-            echo "::error::Compile-only API stubs leaked into production JAR"
-            exit 1
-          fi
-
-      - name: Run offline save-compatibility and routing tests
-        shell: bash
+          bash build.sh
+          mvn -B -q package
+          cmp dist/Nodes-Military.jar target/Nodes-Military.jar
+          unzip -tq dist/Nodes-Military.jar
+      - name: Package source and build inputs from the exact commit
         run: |
-          set -euo pipefail
-          mvn -B -ntp -q dependency:build-classpath -Dmdep.outputFile=target/classpath.txt
-          java -cp "target/test-classes:target/classes:$(cat target/classpath.txt)" com.auroria.nodesmilitary.MilitaryRegressionTest
-
-      - name: Package readable source project
-        shell: bash
-        run: |
-          set -euo pipefail
-          zip -q -r dist/Nodes-Military-v1.1.0-Source.zip \
-            src README.md CHANGELOG.md TEST_REPORT.md CI-BUILD.md LICENSE build.sh pom.xml
-          unzip -t dist/Nodes-Military-v1.1.0-Source.zip | tail -1
-          sha256sum dist/Nodes-Military.jar dist/Nodes-Military-v1.1.0-Source.zip
-
-      - name: Commit readable source to main
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src README.md CHANGELOG.md TEST_REPORT.md CI-BUILD.md LICENSE build.sh pom.xml
-          if git ls-files --error-unmatch Nodes-Extra-v1.1.0-GitHub-Ready.zip >/dev/null 2>&1; then
-            git rm Nodes-Extra-v1.1.0-GitHub-Ready.zip
-          fi
-          if ! git diff --cached --quiet; then
-            git commit -m "Import Nodes-Military v1.1.0 readable source project"
-            git push origin HEAD:main
-          fi
-
-      - name: Attach separate JAR and source ZIP to GitHub Release
-        shell: bash
+          git archive --format=zip --prefix=Nodes-Military-1.2.0/ \
+            --output="$RUNNER_TEMP/$SOURCE_NAME" "$GITHUB_SHA"
+          unzip -tq "$RUNNER_TEMP/$SOURCE_NAME"
+      - name: Publish verified JAR and source
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view v1.1.0 >/dev/null 2>&1; then
-            gh release upload v1.1.0 \
-              "dist/Nodes-Military.jar#Nodes-Military.jar" \
-              "dist/Nodes-Military-v1.1.0-Source.zip#Nodes-Military-v1.1.0-Source.zip" --clobber
+          endpoint="repos/$GITHUB_REPOSITORY/releases"
+          if gh release view "$TAG" --json databaseId > "$RUNNER_TEMP/release.json"; then
+            target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
+            actual=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha 2>/dev/null || true)
+            if [[ "$target" != "$GITHUB_SHA" && "$actual" != "$GITHUB_SHA" ]]; then
+              echo 'This release already targets another commit.' >&2
+              exit 1
+            fi
           else
-            gh release create v1.1.0 \
-              "dist/Nodes-Military.jar#Nodes-Military.jar" \
-              "dist/Nodes-Military-v1.1.0-Source.zip#Nodes-Military-v1.1.0-Source.zip" \
-              --target "$(git rev-parse HEAD)" \
-              --title "Nodes-Military v1.1.0 — GUI Edition" \
-              --notes "GUI for national armies, divisions, ranks, enlistment, appointments and strategic orders. v1.0.0-compatible save fields, optional read-only Nodes-Extra support, and atomic backup saves. Offline tests passed; live two-player Paper validation remains outstanding."
+            gh release create "$TAG" --target "$GITHUB_SHA" --draft \
+              --title 'Nodes Military 1.2.0' --notes-file docs/RELEASE.md
           fi
-          gh release view v1.1.0 --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
+          id=$(gh release view "$TAG" --json databaseId --jq .databaseId)
+          draft=$(gh release view "$TAG" --json isDraft --jq .isDraft)
+          for asset in dist/Nodes-Military.jar "$RUNNER_TEMP/$SOURCE_NAME"; do
+            name=$(basename "$asset")
+            asset_id=$(gh api "$endpoint/$id/assets" | jq -r --arg name "$name" '.[] | select(.name == $name) | .id')
+            if [[ -z "$asset_id" ]]; then
+              [[ "$draft" == true ]]
+              gh release upload "$TAG" "$asset"
+              asset_id=$(gh api "$endpoint/$id/assets" | jq -r --arg name "$name" '.[] | select(.name == $name) | .id')
+            fi
+            gh api -H 'Accept: application/octet-stream' "$endpoint/assets/$asset_id" > "$RUNNER_TEMP/verify-$name"
+            cmp "$asset" "$RUNNER_TEMP/verify-$name"
+          done
+          if [[ "$draft" == true ]]; then
+            gh release edit "$TAG" --draft=false --latest
+          fi
