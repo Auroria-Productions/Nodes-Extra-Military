@@ -1,4 +1,4 @@
-# Nodes-Military 1.2.0
+# Nodes-Military 1.3.0
 military:
   # When false, every citizen may manage their nation's formations.
   requireMarshalAuthority: true
