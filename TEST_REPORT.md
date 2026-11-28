@@ -1,4 +1,12 @@
-# Nodes Military 1.2.0 verification
+# Nodes Military 1.3.0 verification
+
+## 1.3.0 automated checks
+
+The regression suite covers case-insensitive roster search, stable alphabetical pagination, 500-member rosters, and non-destructive browsing, in addition to schema-1 save compatibility, ordered writes, private/public data separation, depot reachability and office authority.
+
+GitHub Actions also builds with the published MilzzyNodes dev.5.11 compile dependencies and verifies the Maven and shell build JARs match. A passing CI run confirms compilation and automated tests, not a live GUI test.
+
+## Previously tested in-game with Nodes Military 1.2.0
 
 | Environment | Checks completed |
 | --- | --- |
@@ -8,3 +16,6 @@
 | Paper 26.3 build 256, Java 25, Vault, core and Nodes-Extra | A cold start loaded an army in the published 1.1 format. Checked console help, save, reload, history, core command forwarding and the Nodes-Extra command handler. |
 
 Interactive player checks ran on 1.21.11. The 26.3 checks covered the server lifecycle and commands. Production saves and the live server were outside these tests.
+
+
+The v1.3.0 GUI shortcuts and roster search have not yet been retested with actual Minecraft clients.
