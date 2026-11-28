@@ -2,7 +2,7 @@
 
 Nodes Military is Auroria Productions’ army and division addon for MilzzyNodes. Citizens can enlist, see who commands their division and read its current orders. Leaders can organise formations and set muster points through an in-game inventory menu or chat commands.
 
-[Download Nodes-Military.jar](https://github.com/Auroria-Productions/Nodes-Extra-Military/releases/download/v1.2.0/Nodes-Military.jar) · [Download the source ZIP](https://github.com/Auroria-Productions/Nodes-Extra-Military/releases/download/v1.2.0/Nodes-Military-1.2.0-Source.zip) · [Release notes](https://github.com/Auroria-Productions/Nodes-Extra-Military/releases/tag/v1.2.0)
+[Download Nodes-Military.jar](https://github.com/Auroria-Productions/Nodes-Extra-Military/releases/download/v1.3.0/Nodes-Military.jar) · [Download the source ZIP](https://github.com/Auroria-Productions/Nodes-Extra-Military/releases/download/v1.3.0/Nodes-Military-1.3.0-Source.zip) · [Release notes](https://github.com/Auroria-Productions/Nodes-Extra-Military/releases/tag/v1.3.0)
 
 ## What the addon includes
 
@@ -16,9 +16,9 @@ Nodes Military is Auroria Productions’ army and division addon for MilzzyNodes
 
 ## Requirements and installation
 
-1. Run Paper with the Java version required by your server. Nodes Military targets Java 21 bytecode and Bukkit API 1.21. The release was checked on Paper **1.21.11 build 132** and **26.3 build 256** with Java 25.
+1. Run Paper with the Java version required by your server. Nodes Military targets Java 21 bytecode and Bukkit API 1.21. The preceding v1.2.0 release was checked on Paper **1.21.11 build 132** and **26.3 build 256** with Java 25. The v1.3.0 GUI improvements have automated regression coverage but still require a staging-server check.
 2. Install **Vault** and **MilzzyNodes dev.5.11** for the core. Install **Nodes-Extra 1.1.0** if you want depot reports or authority from a government office. Army management, rosters and orders work with the core alone.
-3. Stop the server. For an upgrade from Nodes-Military 1.0.0 or 1.1.0, back up `plugins/Nodes-Military/` and replace the old addon JAR. Keep the data directory and a single copy of the addon in `plugins/`.
+3. Stop the server. For an upgrade from Nodes-Military 1.0.0, 1.1.0 or 1.2.0, back up `plugins/Nodes-Military/` and replace the old addon JAR. Keep the data directory and a single copy of the addon in `plugins/`.
 4. Start Paper. Run `nmilitary help` in the console. In game, join a Nodes nation and enter `/nmilitary` to open its menu.
 
 [MilzzyNodes core release](https://github.com/Auroria-Productions/Auroria-Nodes/releases/tag/v1.21-26.3-core-dev.5.11) · [Optional Nodes-Extra addon](https://github.com/Auroria-Productions/Nodes-Extra-) · [Default configuration](src/main/resources/config.yml) · [Plugin descriptor](src/main/resources/plugin.yml)
@@ -28,6 +28,8 @@ Nodes Military is Auroria Productions’ army and division addon for MilzzyNodes
 - **Create a formation.** Open `/nmilitary` and select **Create army**. Enter its name in chat. Open the army, select **Create division**, choose its type and enter the division name. Type `cancel` to exit a naming prompt.
 - **Enlist.** Select an army and division, then **Enlist**. Select a member to see the rank actions available to you. You can appoint a citizen who is offline. A division commander must already belong to that division.
 - **Set a location.** Stand in a territory your nation owns in the configured Nodes world. Use **Set muster here** on the army screen or **Issue order** on the division screen. Both the menu and chat commands accept a distant friendly territory ID.
+- **Jump to your division.** Enlisted citizens can select **My division** on the army menu to open their own division roster, rank and orders immediately.
+- **Search a large roster.** In a division menu, select **Search personnel** and type part of a player name in chat. Matching names are sorted alphabetically, and the filter stays active while paging or opening a personnel record. Select **Clear roster search** to show everyone again. Browsing never changes stored enlistments.
 - **Review readiness.** Select an army and open **Readiness report**. Use the arrows to change pages or return to the previous screen. The menu asks for confirmation before a unit is disbanded.
 
 ## Command index

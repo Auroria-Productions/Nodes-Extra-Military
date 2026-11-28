@@ -165,12 +165,21 @@ final class Menus implements Listener {
                         home(p, page);
                 }));
             Division own = plugin.state.membership(p.getUniqueId());
-            if (own != null)
+            if (own != null) {
+                for (Army assigned : list) {
+                    if (assigned.divisions.containsValue(own)) {
+                        b.put(51, Material.COMPASS, "My division: " + own.name,
+                                List.of("Go straight to your roster, rank and orders."),
+                                () -> division(p, assigned, own, 0));
+                        break;
+                    }
+                }
                 b.put(47, Material.OAK_DOOR, "Leave " + own.name, List.of("Withdraw your own enlistment."), () -> confirm(p, b, "Leave " + own.name, () -> {
                     if (plugin.state.membership(p.getUniqueId()) == own)
                         cmd.execute(p, "leave");
                     home(p, page);
                 }, () -> home(p, page)));
+            }
             pages(b, page, list.size(), i -> home(p, i));
         }
         p.openInventory(b.inv);
@@ -266,16 +275,23 @@ final class Menus implements Listener {
     }
 
     private void division(Player p, Army a, Division d, int wanted) {
+        division(p, a, d, wanted, "");
+    }
+
+    private void division(Player p, Army a, Division d, int wanted, String filter) {
         Nation n = cmd.nation(p);
+        String search = filter == null ? "" : filter.strip();
+        List<UUID> visible = MilitaryState.roster(d, plugin.nodes::name, search);
         Board b = new Board(p, "Division • " + d.name, a, d);
-        int page = page(wanted, d.members.size());
+        int page = page(wanted, visible.size());
         boolean manage = cmd.manages(p, n, a), lead = cmd.commands(p, n, a, d);
-        for (int i = page * PAGE_SIZE; i < Math.min(d.members.size(), (page + 1) * PAGE_SIZE); i++) {
-            UUID member = d.members.get(i);
-            b.put(i % PAGE_SIZE, Material.PLAYER_HEAD, plugin.nodes.name(member), List.of("Rank: " + d.rank(member), member.equals(d.commanderUuid) ? "Division commander" : "Enlisted member"), lead ? () -> person(p, n, a, d, member, page) : null);
+        for (int i = page * PAGE_SIZE; i < Math.min(visible.size(), (page + 1) * PAGE_SIZE); i++) {
+            UUID member = visible.get(i);
+            b.put(i % PAGE_SIZE, Material.PLAYER_HEAD, plugin.nodes.name(member), List.of("Rank: " + d.rank(member), member.equals(d.commanderUuid) ? "Division commander" : "Enlisted member"), lead ? () -> person(p, n, a, d, member, page, search) : null);
         }
-        if (d.members.isEmpty())
-            b.put(22, Material.BOOK, "Empty roster", List.of("Citizens may enlist below."), null);
+        if (visible.isEmpty())
+            b.put(22, Material.BOOK, search.isEmpty() ? "Empty roster" : "No matching personnel",
+                    List.of(search.isEmpty() ? "Citizens may enlist below." : "Change or clear your search."), null);
         b.back(() -> army(p, a, 0));
         var membership = plugin.state.membership(p.getUniqueId());
         if (membership == null)
@@ -289,7 +305,15 @@ final class Menus implements Listener {
                     cmd.execute(p, "leave");
                 division(p, a, d, page);
             }, () -> division(p, a, d, page)));
-        b.put(49, icon(d.type), d.name, List.of(d.type + " · " + d.members.size() + "/" + plugin.settings.maxMembers() + " personnel", "Commander: " + plugin.nodes.name(d.commanderUuid), "Order: " + MilitaryCommands.orderText(d)), null);
+        b.put(48, Material.SPYGLASS, "Search personnel",
+                List.of("Enter part of a player's name in chat.", "Currently showing " + visible.size() + " of " + d.members.size()),
+                () -> prompt(p, b, "Search this division by player name", input -> division(p, a, d, 0, input)));
+        if (!search.isEmpty())
+            b.put(51, Material.MILK_BUCKET, "Clear roster search", List.of("Current filter: " + search),
+                    () -> division(p, a, d, 0, ""));
+        b.put(49, icon(d.type), d.name, List.of(d.type + " · " + d.members.size() + "/" + plugin.settings.maxMembers() + " personnel",
+                "Visible: " + visible.size() + " · Page " + (page + 1),
+                "Commander: " + plugin.nodes.name(d.commanderUuid), "Order: " + MilitaryCommands.orderText(d)), null);
         if (lead)
             b.put(47, Material.FILLED_MAP, "Issue order", List.of("Use your location or enter a territory ID."), () -> orders(p, a, d, page));
         if (manage)
@@ -297,13 +321,13 @@ final class Menus implements Listener {
                 cmd.execute(p, "division", "disband", a.name, d.name);
                 army(p, a, 0);
             }, () -> division(p, a, d, page)));
-        pages(b, page, d.members.size(), i -> division(p, a, d, i));
+        pages(b, page, visible.size(), i -> division(p, a, d, i, search));
         p.openInventory(b.inv);
     }
 
-    private void person(Player p, Nation n, Army a, Division d, UUID member, int page) {
+    private void person(Player p, Nation n, Army a, Division d, UUID member, int page, String filter) {
         if (!d.members.contains(member)) {
-            division(p, a, d, page);
+            division(p, a, d, page, filter);
             return;
         }
         Board b = new Board(p, "Personnel • " + d.name, a, d);
@@ -314,12 +338,12 @@ final class Menus implements Listener {
             int slot = 10;
             for (Rank rank : Rank.values()) b.put(slot++, Material.NAME_TAG, rank.name(), List.of("Set " + name + "'s rank."), () -> {
                 cmd.execute(p, "division", "rank", a.name, d.name, name, rank.name());
-                division(p, a, d, page);
+                division(p, a, d, page, filter);
             });
             if (cmd.manages(p, n, a))
                 b.put(31, Material.GOLDEN_HELMET, "Appoint division commander", List.of(name), () -> {
                     cmd.execute(p, "division", "commander", a.name, d.name, name);
-                    division(p, a, d, page);
+                    division(p, a, d, page, filter);
                 });
         } else
             b.put(22, Material.PAPER, "Read-only personnel record", List.of("Appointments require citizenship and command authority."), null);
