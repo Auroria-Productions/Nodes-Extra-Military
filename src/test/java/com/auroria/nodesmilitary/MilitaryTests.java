@@ -154,6 +154,25 @@ public final class MilitaryTests {
         rejected(() -> ExtraBridge.parse(fixture));
     }
 
+    private static void searchableRosters() {
+        var division = new MilitaryState.Division();
+        UUID bob = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        UUID alice = UUID.fromString("00000000-0000-0000-0000-000000000002");
+        UUID alana = UUID.fromString("00000000-0000-0000-0000-000000000003");
+        division.members.addAll(List.of(bob, alana, alice));
+        Map<UUID, String> names = Map.of(bob, "Bob", alice, "Alice", alana, "Alana");
+        assert MilitaryState.roster(division, names::get, "").equals(List.of(alana, alice, bob));
+        assert MilitaryState.roster(division, names::get, " AL ").equals(List.of(alana, alice));
+        assert MilitaryState.roster(division, names::get, "BOB").equals(List.of(bob));
+        assert MilitaryState.roster(division, names::get, "nonexistent").isEmpty();
+        assert MilitaryState.roster(division, names::get, null).size() == 3;
+        assert division.members.equals(List.of(bob, alana, alice)); // browsing never mutates the save
+        for (int i = 0; i < 500; i++)
+            division.members.add(UUID.nameUUIDFromBytes(("extra-" + i).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        assert MilitaryState.roster(division, names::get, "").size() == 503;
+        assert Menus.page(12, 503) == 11;
+    }
+
     public static void main(String[] args) throws Exception {
         if (!MilitaryTests.class.desiredAssertionStatus())
             throw new IllegalStateException("Run tests with -ea");
@@ -161,12 +180,13 @@ public final class MilitaryTests {
         try {
             persistence(dir);
             supplyAndOffices();
+            searchableRosters();
         } finally {
             try (var paths = Files.walk(dir)) {
                 for (var p : paths.sorted(Comparator.reverseOrder()).toList()) Files.delete(p);
             }
         }
         assert Menus.page(5, 0) == 0 && Menus.page(1, 45) == 0 && Menus.page(2, 46) == 1 && Menus.page(-1, 90) == 0;
-        System.out.println("Passed schema-1 upgrade, ordered writes, public feed privacy, invalid saves, authority, supply routes and menu pagination.");
+        System.out.println("Passed schema-1 upgrade, ordered writes, public feed privacy, invalid saves, authority, supply routes and searchable GUI rosters and pagination.");
     }
 }
